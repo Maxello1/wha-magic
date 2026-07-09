@@ -19,9 +19,23 @@ public class SpellPaperItem extends Item {
 
     @Override
     public InteractionResult use(Level level, Player player, InteractionHand hand) {
+        ItemStack stack = player.getItemInHand(hand);
+        java.util.List<java.util.List<com.maxello1.whamagic.parser.Point>> strokes = stack.get(WitchHatMod.STROKES_COMPONENT);
+        
+        if (strokes != null && !strokes.isEmpty()) {
+            com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
+            if (result.ir.valid() && result.ir.active()) {
+                if (!level.isClientSide()) {
+                    com.maxello1.whamagic.magic.SpellExecutionService.execute(level, player, result.ir);
+                    if (!player.getAbilities().instabuild) {
+                        stack.shrink(1);
+                    }
+                }
+                return InteractionResult.SUCCESS;
+            }
+        }
+        
         if (level.isClientSide()) {
-            ItemStack stack = player.getItemInHand(hand);
-            java.util.List<java.util.List<com.maxello1.whamagic.parser.Point>> strokes = stack.get(WitchHatMod.STROKES_COMPONENT);
             ClientUtils.openSpellScreen(hand, strokes);
         }
         return InteractionResult.SUCCESS;
