@@ -23,17 +23,8 @@ public class SpellDrawingScreen extends Screen {
         this.hand = hand;
         if (existingStrokes != null) {
             this.strokes.addAll(existingStrokes);
-            // Immediately evaluate existing strokes
             com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
-            if (result.isValidSpell()) {
-                recognizedSpellId = result.sign.id;
-                recognizedSpellElement = result.sign.element;
-                currentSpellStatus = result.statusMessage + " (" + String.format("%.0f%%", result.sign.score * 100) + ")";
-            } else {
-                recognizedSpellId = null;
-                recognizedSpellElement = null;
-                currentSpellStatus = result.statusMessage;
-            }
+            currentSpellStatus = result.ir.statusMessage();
         }
         // Ensure dictionary is loaded on the client
         SpellDictionary.ensureLoaded();
@@ -69,25 +60,14 @@ public class SpellDrawingScreen extends Screen {
 
     @Override
     public boolean mouseReleased(net.minecraft.client.input.MouseButtonEvent event) {
-        if (event.button() == 0 && currentStroke != null) {
+        if (event.button() == 0 && currentStroke != null && !currentStroke.isEmpty()) {
             currentStroke.add(new Point(event.x(), event.y()));
-            strokes.add(currentStroke);
-            currentStroke = null;
-
-            // Evaluate spell using SpellParser (Ring + Sign grammar)
-            com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
+            strokes.add(new ArrayList<>(currentStroke));
+            currentStroke.clear();
             
-            if (result.isValidSpell()) {
-                recognizedSpellId = result.sign.id;
-                recognizedSpellElement = result.sign.element;
-                currentSpellStatus = result.statusMessage + " (" + String.format("%.0f%%", result.sign.score * 100) + ")";
-            } else {
-                recognizedSpellId = null;
-                recognizedSpellElement = null;
-                currentSpellStatus = result.statusMessage;
-            }
-
-            return true;
+            // Re-evaluate spell incrementally
+            com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
+            currentSpellStatus = result.ir.statusMessage();
         }
         return super.mouseReleased(event);
     }

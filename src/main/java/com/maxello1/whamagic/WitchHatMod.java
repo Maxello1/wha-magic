@@ -66,7 +66,7 @@ public class WitchHatMod implements ModInitializer {
                     com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(payload.strokes());
                     String compiledSpellString = "";
                     if (result.isValidSpell()) {
-                        compiledSpellString = result.sign.element != null ? result.sign.element : result.sign.id;
+                        compiledSpellString = result.ir.element();
                         LOGGER.info("Compiled spell: {}", compiledSpellString);
                     } else {
                         LOGGER.info("Invalid or incomplete spell drawn.");
