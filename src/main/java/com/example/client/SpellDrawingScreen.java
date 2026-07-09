@@ -1,6 +1,5 @@
 package com.example.client;
 
-import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
@@ -21,28 +20,28 @@ public class SpellDrawingScreen extends Screen {
     }
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button == 0) {
+    public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
+        if (event.button() == 0) {
             currentStroke = new ArrayList<>();
-            currentStroke.add(new Point(mouseX, mouseY));
+            currentStroke.add(new Point(event.x(), event.y()));
             return true;
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        return super.mouseClicked(event, doubleClick);
     }
 
     @Override
-    public boolean mouseDragged(double mouseX, double mouseY, int button, double deltaX, double deltaY) {
-        if (button == 0 && currentStroke != null) {
-            currentStroke.add(new Point(mouseX, mouseY));
+    public boolean mouseDragged(net.minecraft.client.input.MouseButtonEvent event, double deltaX, double deltaY) {
+        if (event.button() == 0 && currentStroke != null) {
+            currentStroke.add(new Point(event.x(), event.y()));
             return true;
         }
-        return super.mouseDragged(mouseX, mouseY, button, deltaX, deltaY);
+        return super.mouseDragged(event, deltaX, deltaY);
     }
 
     @Override
-    public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (button == 0 && currentStroke != null) {
-            currentStroke.add(new Point(mouseX, mouseY));
+    public boolean mouseReleased(net.minecraft.client.input.MouseButtonEvent event) {
+        if (event.button() == 0 && currentStroke != null) {
+            currentStroke.add(new Point(event.x(), event.y()));
             strokes.add(currentStroke);
             currentStroke = null;
             
@@ -56,13 +55,11 @@ public class SpellDrawingScreen extends Screen {
             
             return true;
         }
-        return super.mouseReleased(mouseX, mouseY, button);
+        return super.mouseReleased(event);
     }
 
     @Override
-    public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-        super.renderBackground(graphics, mouseX, mouseY, delta);
-
+    public void extractRenderState(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         // Draw saved strokes
         for (List<Point> stroke : strokes) {
             drawStroke(graphics, stroke, 0xFFFFFFFF);
@@ -73,12 +70,12 @@ public class SpellDrawingScreen extends Screen {
             drawStroke(graphics, currentStroke, 0xFFFF5555);
         }
         
-        graphics.drawString(this.font, currentSpell, 10, 10, 0xFF00FF00, true);
+        graphics.text(this.font, currentSpell, 10, 10, 0xFF00FF00);
 
-        super.render(graphics, mouseX, mouseY, delta);
+        super.extractRenderState(graphics, mouseX, mouseY, delta);
     }
     
-    private void drawStroke(GuiGraphics graphics, List<Point> stroke, int color) {
+    private void drawStroke(net.minecraft.client.gui.GuiGraphicsExtractor graphics, List<Point> stroke, int color) {
         if (stroke.size() < 2) return;
         for (int i = 0; i < stroke.size() - 1; i++) {
             Point p1 = stroke.get(i);
