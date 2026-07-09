@@ -1,4 +1,4 @@
-package com.example.item;
+package com.maxello1.whamagic.item;
 
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
@@ -6,11 +6,11 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.Level;
-import com.example.client.ClientUtils;
+import com.maxello1.whamagic.client.ClientUtils;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.TooltipFlag;
 import java.util.List;
-import com.example.WitchHatMod;
+import com.maxello1.whamagic.WitchHatMod;
 
 public class SpellPaperItem extends Item {
     public SpellPaperItem(Properties properties) {
@@ -21,7 +21,7 @@ public class SpellPaperItem extends Item {
     public InteractionResult use(Level level, Player player, InteractionHand hand) {
         if (level.isClientSide()) {
             ItemStack stack = player.getItemInHand(hand);
-            java.util.List<java.util.List<com.example.parser.Point>> strokes = stack.get(WitchHatMod.STROKES_COMPONENT);
+            java.util.List<java.util.List<com.maxello1.whamagic.parser.Point>> strokes = stack.get(WitchHatMod.STROKES_COMPONENT);
             ClientUtils.openSpellScreen(hand, strokes);
         }
         return InteractionResult.SUCCESS;

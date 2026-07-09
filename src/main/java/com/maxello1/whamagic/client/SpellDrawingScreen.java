@@ -1,11 +1,11 @@
-package com.example.client;
+package com.maxello1.whamagic.client;
 
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
-import com.example.parser.Point;
-import com.example.parser.CloudRecognizer;
-import com.example.parser.SpellDictionary;
+import com.maxello1.whamagic.parser.Point;
+import com.maxello1.whamagic.parser.CloudRecognizer;
+import com.maxello1.whamagic.parser.SpellDictionary;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -24,7 +24,7 @@ public class SpellDrawingScreen extends Screen {
         if (existingStrokes != null) {
             this.strokes.addAll(existingStrokes);
             // Immediately evaluate existing strokes
-            com.example.parser.SpellParser.ParseResult result = com.example.parser.SpellParser.parse(strokes);
+            com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
             if (result.isValidSpell()) {
                 recognizedSpellId = result.sign.id;
                 recognizedSpellElement = result.sign.element;
@@ -75,7 +75,7 @@ public class SpellDrawingScreen extends Screen {
             currentStroke = null;
 
             // Evaluate spell using SpellParser (Ring + Sign grammar)
-            com.example.parser.SpellParser.ParseResult result = com.example.parser.SpellParser.parse(strokes);
+            com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
             
             if (result.isValidSpell()) {
                 recognizedSpellId = result.sign.id;
@@ -94,15 +94,9 @@ public class SpellDrawingScreen extends Screen {
 
     @Override
     public void onClose() {
-        if (recognizedSpellId != null) {
-            // Send the recognized spell element (or id if no element) to the server
-            String spellValue = recognizedSpellElement != null ? recognizedSpellElement : recognizedSpellId;
-            System.out.println("Sending SpellDrawnPacket with value: " + spellValue);
-            net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(
-                    new com.example.network.SpellDrawnPacket(spellValue, strokes));
-        } else {
-            System.out.println("Closing screen without valid spell.");
-        }
+        System.out.println("Sending SpellDrawnPacket with strokes");
+        net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(
+                new com.maxello1.whamagic.network.SpellDrawnPacket(strokes));
         super.onClose();
     }
 

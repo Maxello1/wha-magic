@@ -1,10 +1,10 @@
-package com.example.parser;
+package com.maxello1.whamagic.parser;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.example.WitchHatMod;
+import com.maxello1.whamagic.WitchHatMod;
 
 import java.io.InputStream;
 import java.io.InputStreamReader;

@@ -1,4 +1,4 @@
-package com.example.client;
+package com.maxello1.whamagic.client;
 
 import net.fabricmc.api.ClientModInitializer;
 

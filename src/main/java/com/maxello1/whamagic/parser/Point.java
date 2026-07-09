@@ -1,4 +1,4 @@
-package com.example.parser;
+package com.maxello1.whamagic.parser;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;

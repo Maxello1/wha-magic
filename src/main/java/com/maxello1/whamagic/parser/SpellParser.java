@@ -1,4 +1,4 @@
-package com.example.parser;
+package com.maxello1.whamagic.parser;
 
 import java.util.ArrayList;
 import java.util.List;

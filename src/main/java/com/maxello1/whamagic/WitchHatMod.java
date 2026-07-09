@@ -1,4 +1,4 @@
-package com.example;
+package com.maxello1.whamagic;
 
 import net.fabricmc.api.ModInitializer;
 import net.minecraft.world.item.Item;
@@ -12,10 +12,10 @@ import com.mojang.serialization.Codec;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import com.example.network.SpellDrawnPacket;
+import com.maxello1.whamagic.network.SpellDrawnPacket;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.example.item.SpellPaperItem;
+import com.maxello1.whamagic.item.SpellPaperItem;
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
 import net.minecraft.world.item.CreativeModeTabs;
 
@@ -32,10 +32,10 @@ public class WitchHatMod implements ModInitializer {
         new DataComponentType.Builder<String>().persistent(Codec.STRING).networkSynchronized(ByteBufCodecs.STRING_UTF8).build()
     );
 
-    public static final DataComponentType<java.util.List<java.util.List<com.example.parser.Point>>> STROKES_COMPONENT = Registry.register(
+    public static final DataComponentType<java.util.List<java.util.List<com.maxello1.whamagic.parser.Point>>> STROKES_COMPONENT = Registry.register(
         BuiltInRegistries.DATA_COMPONENT_TYPE,
         Identifier.fromNamespaceAndPath(MOD_ID, "strokes"),
-        new DataComponentType.Builder<java.util.List<java.util.List<com.example.parser.Point>>>().persistent(com.example.parser.Point.STROKES_CODEC).networkSynchronized(com.example.parser.Point.STROKES_STREAM_CODEC).build()
+        new DataComponentType.Builder<java.util.List<java.util.List<com.maxello1.whamagic.parser.Point>>>().persistent(com.maxello1.whamagic.parser.Point.STROKES_CODEC).networkSynchronized(com.maxello1.whamagic.parser.Point.STROKES_STREAM_CODEC).build()
     );
 
     @Override
@@ -60,9 +60,20 @@ public class WitchHatMod implements ModInitializer {
                 }
                 
                 if (stack.is(SPELL_PAPER)) {
-                    LOGGER.info("Spell drawn packet received: {}", payload.spell());
+                    LOGGER.info("Spell drawn packet received, parsing on server...");
+                    
+                    // Parse the strokes server-side for authority
+                    com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(payload.strokes());
+                    String compiledSpellString = "";
+                    if (result.isValidSpell()) {
+                        compiledSpellString = result.sign.element != null ? result.sign.element : result.sign.id;
+                        LOGGER.info("Compiled spell: {}", compiledSpellString);
+                    } else {
+                        LOGGER.info("Invalid or incomplete spell drawn.");
+                    }
+                    
                     net.minecraft.world.item.ItemStack newStack = stack.copy();
-                    newStack.set(SPELL_COMPONENT, payload.spell());
+                    newStack.set(SPELL_COMPONENT, compiledSpellString);
                     newStack.set(STROKES_COMPONENT, payload.strokes());
                     context.player().setItemInHand(usedHand, newStack);
                     context.player().getInventory().setChanged();
@@ -77,7 +88,7 @@ public class WitchHatMod implements ModInitializer {
         });
 
         // Load spell dictionary templates
-        com.example.parser.SpellDictionary.ensureLoaded();
+        com.maxello1.whamagic.parser.SpellDictionary.ensureLoaded();
 
         LOGGER.info("Witch Hat Atelier mod initialized!");
     }

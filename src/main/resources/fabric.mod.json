@@ -3,23 +3,23 @@
 	"id": "wha-magic",
 	"version": "${version}",
 	"name": "WHA-Magic",
-	"description": "Spell drawing simulator for Minecraft.",
+	"description": "A Witch Hat Atelier spell drawing mod for Minecraft.",
 	"authors": [
-		"Me!"
+		"Maxello1"
 	],
 	"contact": {
-		"homepage": "https://fabricmc.net/",
+		"homepage": "https://github.com/Maxello1/wha-magic",
 		"sources": "https://github.com/Maxello1/wha-magic"
 	},
-	"license": "CC0-1.0",
+	"license": "MIT",
 	"icon": "assets/wha-magic/icon.png",
 	"environment": "*",
 	"entrypoints": {
 		"main": [
-			"com.example.WitchHatMod"
+			"com.maxello1.whamagic.WitchHatMod"
 		],
 		"client": [
-			"com.example.client.WitchHatModClient"
+			"com.maxello1.whamagic.client.WitchHatModClient"
 		]
 	},
 	"depends": {
