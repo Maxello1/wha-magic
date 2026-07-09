@@ -1,21 +1,22 @@
 package com.example.client;
 
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.text.Text;
-import net.minecraft.util.Hand;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.InteractionHand;
 import com.example.parser.Point;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public class SpellDrawingScreen extends Screen {
-    private final Hand hand;
+    private final InteractionHand hand;
     private final List<List<Point>> strokes = new ArrayList<>();
     private List<Point> currentStroke = null;
+    private String currentSpell = "";
 
-    public SpellDrawingScreen(Hand hand) {
-        super(Text.literal("Draw Spell"));
+    public SpellDrawingScreen(InteractionHand hand) {
+        super(Component.literal("Draw Spell"));
         this.hand = hand;
     }
 
@@ -38,8 +39,6 @@ public class SpellDrawingScreen extends Screen {
         return super.mouseDragged(mouseX, mouseY, button, deltaX, deltaY);
     }
 
-    private String currentSpell = "";
-
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
         if (button == 0 && currentStroke != null) {
@@ -61,37 +60,35 @@ public class SpellDrawingScreen extends Screen {
     }
 
     @Override
-    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-        this.renderBackground(context, mouseX, mouseY, delta);
+    public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
+        super.renderBackground(graphics, mouseX, mouseY, delta);
 
         // Draw saved strokes
         for (List<Point> stroke : strokes) {
-            drawStroke(context, stroke, 0xFFFFFFFF);
+            drawStroke(graphics, stroke, 0xFFFFFFFF);
         }
 
         // Draw current stroke
         if (currentStroke != null) {
-            drawStroke(context, currentStroke, 0xFFFF5555);
+            drawStroke(graphics, currentStroke, 0xFFFF5555);
         }
         
-        context.drawText(this.textRenderer, currentSpell, 10, 10, 0xFF00FF00, true);
+        graphics.drawString(this.font, currentSpell, 10, 10, 0xFF00FF00, true);
 
-        super.render(context, mouseX, mouseY, delta);
+        super.render(graphics, mouseX, mouseY, delta);
     }
     
-    private void drawStroke(DrawContext context, List<Point> stroke, int color) {
+    private void drawStroke(GuiGraphics graphics, List<Point> stroke, int color) {
         if (stroke.size() < 2) return;
         for (int i = 0; i < stroke.size() - 1; i++) {
             Point p1 = stroke.get(i);
             Point p2 = stroke.get(i + 1);
-            // Draw a simple line using fill for prototype (1px thick)
-            // A real implementation would use Tessellator to draw thick smooth lines.
-            context.fill((int)p1.x, (int)p1.y, (int)p2.x + 1, (int)p2.y + 1, color);
+            graphics.fill((int)p1.x, (int)p1.y, (int)p2.x + 1, (int)p2.y + 1, color);
         }
     }
 
     @Override
-    public boolean shouldPause() {
+    public boolean isPauseScreen() {
         return false;
     }
 }

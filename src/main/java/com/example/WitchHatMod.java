@@ -1,28 +1,28 @@
 package com.example;
 
 import net.fabricmc.api.ModInitializer;
-import net.minecraft.item.Item;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.util.Identifier;
+import net.minecraft.world.item.Item;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.Registry;
+import net.minecraft.resources.ResourceLocation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.example.item.SpellPaperItem;
 import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
-import net.minecraft.item.ItemGroups;
+import net.minecraft.world.item.CreativeModeTabs;
 
 public class WitchHatMod implements ModInitializer {
     public static final String MOD_ID = "witchhat";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-    public static final Item SPELL_PAPER = new SpellPaperItem(new Item.Settings().maxCount(1));
+    public static final Item SPELL_PAPER = new SpellPaperItem(new Item.Properties().stacksTo(1));
 
     @Override
     public void onInitialize() {
-        Registry.register(Registries.ITEM, new Identifier(MOD_ID, "spell_paper"), SPELL_PAPER);
+        Registry.register(BuiltInRegistries.ITEM, new ResourceLocation(MOD_ID, "spell_paper"), SPELL_PAPER);
         
-        ItemGroupEvents.modifyEntriesEvent(ItemGroups.TOOLS).register(content -> {
-            content.add(SPELL_PAPER);
+        ItemGroupEvents.modifyEntriesEvent(CreativeModeTabs.TOOLS_AND_UTILITIES).register(content -> {
+            content.accept(SPELL_PAPER);
         });
 
         LOGGER.info("Witch Hat Atelier mod initialized!");
