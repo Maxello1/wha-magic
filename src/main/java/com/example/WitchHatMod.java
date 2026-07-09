@@ -12,7 +12,7 @@ import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
 import net.minecraft.world.item.CreativeModeTabs;
 
 public class WitchHatMod implements ModInitializer {
-    public static final String MOD_ID = "witchhat";
+    public static final String MOD_ID = "wha-magic";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
     public static final Item SPELL_PAPER = new SpellPaperItem(new Item.Properties().stacksTo(1));

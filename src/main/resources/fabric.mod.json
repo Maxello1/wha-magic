@@ -1,18 +1,18 @@
 {
 	"schemaVersion": 1,
-	"id": "witchhat",
+	"id": "wha-magic",
 	"version": "${version}",
-	"name": "Witch Hat Atelier",
+	"name": "WHA-Magic",
 	"description": "Spell drawing simulator for Minecraft.",
 	"authors": [
 		"Me!"
 	],
 	"contact": {
 		"homepage": "https://fabricmc.net/",
-		"sources": "https://github.com/FabricMC/fabric-example-mod"
+		"sources": "https://github.com/Maxello1/wha-magic"
 	},
 	"license": "CC0-1.0",
-	"icon": "assets/witchhat/icon.png",
+	"icon": "assets/wha-magic/icon.png",
 	"environment": "*",
 	"entrypoints": {
 		"main": [
@@ -23,16 +23,16 @@
 		]
 	},
 	"mixins": [
-		"witchhat.mixins.json",
+		"wha-magic.mixins.json",
 		{
-			"config": "witchhat.client.mixins.json",
+			"config": "wha-magic.client.mixins.json",
 			"environment": "client"
 		}
 	],
 	"depends": {
 		"fabricloader": ">=0.19.3",
-		"minecraft": "~1.20.4",
-		"java": ">=17",
+		"minecraft": ">=26.1",
+		"java": ">=25",
 		"fabric-api": "*"
 	}
 }
