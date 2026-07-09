@@ -20,7 +20,9 @@ public class SpellPaperItem extends Item {
     @Override
     public InteractionResult use(Level level, Player player, InteractionHand hand) {
         if (level.isClientSide()) {
-            ClientUtils.openSpellScreen(hand);
+            ItemStack stack = player.getItemInHand(hand);
+            java.util.List<java.util.List<com.example.parser.Point>> strokes = stack.get(WitchHatMod.STROKES_COMPONENT);
+            ClientUtils.openSpellScreen(hand, strokes);
         }
         return InteractionResult.SUCCESS;
     }

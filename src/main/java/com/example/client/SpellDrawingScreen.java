@@ -18,9 +18,23 @@ public class SpellDrawingScreen extends Screen {
     private String recognizedSpellId = null;
     private String recognizedSpellElement = null;
 
-    public SpellDrawingScreen(InteractionHand hand) {
+    public SpellDrawingScreen(InteractionHand hand, List<List<Point>> existingStrokes) {
         super(Component.literal("Draw Spell"));
         this.hand = hand;
+        if (existingStrokes != null) {
+            this.strokes.addAll(existingStrokes);
+            // Immediately evaluate existing strokes
+            com.example.parser.SpellParser.ParseResult result = com.example.parser.SpellParser.parse(strokes);
+            if (result.isValidSpell()) {
+                recognizedSpellId = result.sign.id;
+                recognizedSpellElement = result.sign.element;
+                currentSpellStatus = result.statusMessage + " (" + String.format("%.0f%%", result.sign.score * 100) + ")";
+            } else {
+                recognizedSpellId = null;
+                recognizedSpellElement = null;
+                currentSpellStatus = result.statusMessage;
+            }
+        }
         // Ensure dictionary is loaded on the client
         SpellDictionary.ensureLoaded();
     }
@@ -85,7 +99,7 @@ public class SpellDrawingScreen extends Screen {
             String spellValue = recognizedSpellElement != null ? recognizedSpellElement : recognizedSpellId;
             System.out.println("Sending SpellDrawnPacket with value: " + spellValue);
             net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(
-                    new com.example.network.SpellDrawnPacket(spellValue));
+                    new com.example.network.SpellDrawnPacket(spellValue, strokes));
         } else {
             System.out.println("Closing screen without valid spell.");
         }

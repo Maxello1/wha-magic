@@ -32,6 +32,12 @@ public class WitchHatMod implements ModInitializer {
         new DataComponentType.Builder<String>().persistent(Codec.STRING).networkSynchronized(ByteBufCodecs.STRING_UTF8).build()
     );
 
+    public static final DataComponentType<java.util.List<java.util.List<com.example.parser.Point>>> STROKES_COMPONENT = Registry.register(
+        BuiltInRegistries.DATA_COMPONENT_TYPE,
+        Identifier.fromNamespaceAndPath(MOD_ID, "strokes"),
+        new DataComponentType.Builder<java.util.List<java.util.List<com.example.parser.Point>>>().persistent(com.example.parser.Point.STROKES_CODEC).networkSynchronized(com.example.parser.Point.STROKES_STREAM_CODEC).build()
+    );
+
     @Override
     public void onInitialize() {
         Registry.register(BuiltInRegistries.ITEM, SPELL_PAPER_KEY, SPELL_PAPER);
@@ -57,6 +63,7 @@ public class WitchHatMod implements ModInitializer {
                     LOGGER.info("Spell drawn packet received: {}", payload.spell());
                     net.minecraft.world.item.ItemStack newStack = stack.copy();
                     newStack.set(SPELL_COMPONENT, payload.spell());
+                    newStack.set(STROKES_COMPONENT, payload.strokes());
                     context.player().setItemInHand(usedHand, newStack);
                     context.player().getInventory().setChanged();
                     if (context.player() instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
