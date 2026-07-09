@@ -1,7 +1,6 @@
 package com.example.parser;
 
 import java.util.List;
-import com.example.client.SpellDrawingScreen.Point; // Ideally Point is moved to a common package, but for prototype this is fine.
 
 public class SymbolRecognizer {
     

@@ -4,6 +4,7 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
+import com.example.parser.Point;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -92,13 +93,5 @@ public class SpellDrawingScreen extends Screen {
     @Override
     public boolean shouldPause() {
         return false;
-    }
-
-    public static class Point {
-        public final double x, y;
-        public Point(double x, double y) {
-            this.x = x;
-            this.y = y;
-        }
     }
 }
