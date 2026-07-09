@@ -26,10 +26,21 @@ public class SpellPaperItem extends Item {
     }
 
     @Override
+    public Component getName(ItemStack stack) {
+        String spell = stack.get(WitchHatMod.SPELL_COMPONENT);
+        if (spell != null && !spell.isEmpty()) {
+            // Capitalize first letter of spell
+            String capitalized = spell.substring(0, 1).toUpperCase() + spell.substring(1);
+            return Component.literal(capitalized + " Spell");
+        }
+        return super.getName(stack);
+    }
+
+    @Override
     public void appendHoverText(ItemStack stack, Item.TooltipContext context, net.minecraft.world.item.component.TooltipDisplay display, java.util.function.Consumer<Component> tooltipComponents, TooltipFlag tooltipFlag) {
         String spell = stack.get(WitchHatMod.SPELL_COMPONENT);
         if (spell != null && !spell.isEmpty()) {
-            tooltipComponents.accept(Component.literal("§dSpell: " + spell));
+            tooltipComponents.accept(Component.literal("§dPrepared: " + spell));
         } else {
             tooltipComponents.accept(Component.literal("§7Empty Spell Paper"));
         }
