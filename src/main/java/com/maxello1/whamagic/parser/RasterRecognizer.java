@@ -46,11 +46,20 @@ public class RasterRecognizer {
             this.displayName = displayName;
             this.kind = kind;
             this.element = element;
-            this.rawStrokes = strokes;
+            // Filter out single-point strokes (decoration markers in the JSON)
+            List<List<Point>> filteredStrokes = new ArrayList<>();
+            for (List<Point> stroke : strokes) {
+                if (stroke != null && stroke.size() >= 2) {
+                    filteredStrokes.add(stroke);
+                }
+            }
+            this.rawStrokes = filteredStrokes;
 
-            TemplateNormalizer.NormalizedResult norm = TemplateNormalizer.normalize(strokes, SAMPLES_PER_STROKE);
+            TemplateNormalizer.NormalizedResult norm = TemplateNormalizer.normalize(filteredStrokes, SAMPLES_PER_STROKE);
             this.ink = renderInk(norm.strokes, 0);
-            this.features = extractTemplateFeatures(strokes, norm);
+            this.features = extractTemplateFeatures(filteredStrokes, norm);
+            WitchHatMod.LOGGER.info("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}",
+                    id, filteredStrokes.size(), norm.sourceAspectRatio, this.ink.coreInk);
         }
     }
 
@@ -163,6 +172,18 @@ public class RasterRecognizer {
                 double cap = clamp(0.62 - (inkScores.unexplainedInkRatio - 0.36) * 0.8, 0.2, 1.0);
                 confidence = Math.min(confidence, cap);
             }
+
+            WitchHatMod.LOGGER.info("  vs '{}': ink={} explained={} covered={} dice={} struct={} (aspect={} count={} profile={}) -> conf={}",
+                    template.id,
+                    String.format("%.3f", inkScores.inkScore),
+                    String.format("%.3f", inkScores.candidateExplainedRatio),
+                    String.format("%.3f", inkScores.templateCoveredRatio),
+                    String.format("%.3f", inkScores.softDiceScore),
+                    String.format("%.3f", structuralScore),
+                    String.format("%.3f", aspectScore),
+                    String.format("%.3f", countScore),
+                    String.format("%.3f", profileScore),
+                    String.format("%.3f", confidence));
 
             if (confidence > bestScore) {
                 secondScore = bestScore;
