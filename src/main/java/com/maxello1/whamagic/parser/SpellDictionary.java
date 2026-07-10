@@ -33,13 +33,13 @@ public class SpellDictionary {
         if (loaded) return;
         loaded = true;
 
-        CloudRecognizer.clearTemplates();
+        RasterRecognizer.clearTemplates();
 
         int sigilCount = loadFromResource("/data/wha-magic/dictionary/sigils.json", "sigil");
         int signCount = loadFromResource("/data/wha-magic/dictionary/signs.json", "sign");
 
         WitchHatMod.LOGGER.info("SpellDictionary loaded: {} sigils, {} signs ({} total templates)",
-                sigilCount, signCount, CloudRecognizer.getTemplateCount());
+                sigilCount, signCount, RasterRecognizer.getTemplateCount());
     }
 
     /**
@@ -91,7 +91,7 @@ public class SpellDictionary {
                     continue;
                 }
 
-                CloudRecognizer.addTemplate(id, displayName, kind, element, strokes);
+                RasterRecognizer.addTemplate(id, displayName, kind, element, strokes);
                 count++;
             }
         } catch (Exception e) {

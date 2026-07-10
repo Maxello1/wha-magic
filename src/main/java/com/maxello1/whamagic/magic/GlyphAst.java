@@ -1,6 +1,6 @@
 package com.maxello1.whamagic.magic;
 
-import com.maxello1.whamagic.parser.CloudRecognizer.RecognitionResult;
+import com.maxello1.whamagic.parser.RasterRecognizer.RecognitionResult;
 import java.util.List;
 
 public record GlyphAst(

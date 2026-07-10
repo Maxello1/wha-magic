@@ -31,14 +31,14 @@ public class SpellParser {
         
         LayerMapper.LayeredStrokes layers = LayerMapper.mapLayers(strokes, ring);
         
-        CloudRecognizer.RecognitionResult primarySigil = null;
+        RasterRecognizer.RecognitionResult primarySigil = null;
         if (!layers.coreStrokes.isEmpty()) {
-            primarySigil = CloudRecognizer.recognize(layers.coreStrokes);
+            primarySigil = RasterRecognizer.recognize(layers.coreStrokes);
         }
         
-        List<CloudRecognizer.RecognitionResult> signs = new ArrayList<>();
+        List<RasterRecognizer.RecognitionResult> signs = new ArrayList<>();
         if (!layers.signStrokes.isEmpty()) {
-            signs.add(CloudRecognizer.recognize(layers.signStrokes));
+            signs.add(RasterRecognizer.recognize(layers.signStrokes));
         }
 
         GlyphAst ast = new GlyphAst(ring, primarySigil, signs);
