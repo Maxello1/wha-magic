@@ -36,7 +36,19 @@ public class SpellPaperItem extends Item {
         }
         
         if (level.isClientSide()) {
-            ClientUtils.openSpellScreen(hand, strokes);
+            boolean hasWand = false;
+            for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+                if (player.getInventory().getItem(i).getItem() instanceof InkWandItem) {
+                    hasWand = true;
+                    break;
+                }
+            }
+            
+            if (hasWand || player.getAbilities().instabuild) {
+                ClientUtils.openSpellScreen(hand, strokes);
+            } else {
+                player.sendSystemMessage(net.minecraft.network.chat.Component.literal("§cYou need an Ink Wand to draw spells."));
+            }
         }
         return InteractionResult.SUCCESS;
     }

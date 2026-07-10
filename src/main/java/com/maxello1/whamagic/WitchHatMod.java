@@ -24,7 +24,10 @@ public class WitchHatMod implements ModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
     public static final ResourceKey<Item> SPELL_PAPER_KEY = ResourceKey.create(Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "spell_paper"));
-    public static final Item SPELL_PAPER = new SpellPaperItem(new Item.Properties().setId(SPELL_PAPER_KEY).stacksTo(1));
+    public static final Item SPELL_PAPER = new SpellPaperItem(new Item.Properties().setId(SPELL_PAPER_KEY).stacksTo(64));
+
+    public static final ResourceKey<Item> INK_WAND_KEY = ResourceKey.create(Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "ink_wand"));
+    public static final Item INK_WAND = new com.maxello1.whamagic.item.InkWandItem(new Item.Properties().setId(INK_WAND_KEY).stacksTo(1));
 
     public static final DataComponentType<String> SPELL_COMPONENT = Registry.register(
         BuiltInRegistries.DATA_COMPONENT_TYPE,
@@ -41,9 +44,11 @@ public class WitchHatMod implements ModInitializer {
     @Override
     public void onInitialize() {
         Registry.register(BuiltInRegistries.ITEM, SPELL_PAPER_KEY, SPELL_PAPER);
+        Registry.register(BuiltInRegistries.ITEM, INK_WAND_KEY, INK_WAND);
         
         CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.TOOLS_AND_UTILITIES).register(content -> {
             content.accept(SPELL_PAPER);
+            content.accept(INK_WAND);
         });
 
         // Networking
