@@ -16,6 +16,14 @@ repositories {
 }
 
 loom {
+    splitEnvironmentSourceSets()
+
+    mods {
+        "wha-magic" {
+            sourceSet sourceSets.main
+            sourceSet sourceSets.client
+        }
+    }
 }
 
 dependencies {

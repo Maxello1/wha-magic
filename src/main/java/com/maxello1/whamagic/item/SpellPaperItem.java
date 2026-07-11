@@ -6,11 +6,14 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.Level;
-import com.maxello1.whamagic.client.ClientUtils;
-import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.TooltipFlag;
 import java.util.List;
+import java.util.ArrayList;
 import com.maxello1.whamagic.WitchHatMod;
+import com.maxello1.whamagic.network.OpenSpellScreenPayload;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.network.chat.Component;
 
 public class SpellPaperItem extends Item {
     public SpellPaperItem(Properties properties) {
@@ -35,7 +38,7 @@ public class SpellPaperItem extends Item {
             }
         }
         
-        if (level.isClientSide()) {
+        if (!level.isClientSide()) {
             boolean hasWand = false;
             for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
                 if (player.getInventory().getItem(i).getItem() instanceof InkWandItem) {
@@ -45,7 +48,7 @@ public class SpellPaperItem extends Item {
             }
             
             if (hasWand || player.getAbilities().instabuild) {
-                ClientUtils.openSpellScreen(hand, strokes);
+                ServerPlayNetworking.send((ServerPlayer) player, new OpenSpellScreenPayload(hand, strokes == null ? new ArrayList<>() : strokes));
             } else {
                 player.sendSystemMessage(net.minecraft.network.chat.Component.literal("§cYou need an Ink Wand to draw spells."));
             }

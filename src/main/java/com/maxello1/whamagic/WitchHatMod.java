@@ -13,6 +13,7 @@ import net.minecraft.network.codec.ByteBufCodecs;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import com.maxello1.whamagic.network.SpellDrawnPacket;
+import com.maxello1.whamagic.network.OpenSpellScreenPayload;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.maxello1.whamagic.item.SpellPaperItem;
@@ -58,6 +59,7 @@ public class WitchHatMod implements ModInitializer {
 
         // Networking
         net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry.serverboundPlay().register(SpellDrawnPacket.ID, SpellDrawnPacket.CODEC);
+        net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry.clientboundPlay().register(OpenSpellScreenPayload.ID, OpenSpellScreenPayload.CODEC);
         
         ServerPlayNetworking.registerGlobalReceiver(SpellDrawnPacket.ID, (payload, context) -> {
             context.server().execute(() -> {
