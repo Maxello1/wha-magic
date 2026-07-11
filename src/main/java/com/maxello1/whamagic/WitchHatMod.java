@@ -18,13 +18,18 @@ import org.slf4j.LoggerFactory;
 import com.maxello1.whamagic.item.SpellPaperItem;
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
 import net.minecraft.world.item.CreativeModeTabs;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class WitchHatMod implements ModInitializer {
     public static final String MOD_ID = "wha-magic";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
+    private static final Map<UUID, Integer> sessionRevisions = new ConcurrentHashMap<>();
+
     public static final ResourceKey<Item> SPELL_PAPER_KEY = ResourceKey.create(Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "spell_paper"));
-    public static final Item SPELL_PAPER = new SpellPaperItem(new Item.Properties().setId(SPELL_PAPER_KEY).stacksTo(64));
+    public static final Item SPELL_PAPER = new SpellPaperItem(new Item.Properties().setId(SPELL_PAPER_KEY).stacksTo(1));
 
     public static final ResourceKey<Item> INK_WAND_KEY = ResourceKey.create(Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "ink_wand"));
     public static final Item INK_WAND = new com.maxello1.whamagic.item.InkWandItem(new Item.Properties().setId(INK_WAND_KEY).stacksTo(1));
@@ -56,13 +61,39 @@ public class WitchHatMod implements ModInitializer {
         
         ServerPlayNetworking.registerGlobalReceiver(SpellDrawnPacket.ID, (payload, context) -> {
             context.server().execute(() -> {
-                net.minecraft.world.InteractionHand usedHand = net.minecraft.world.InteractionHand.MAIN_HAND;
-                net.minecraft.world.item.ItemStack stack = context.player().getMainHandItem();
-                
-                if (!stack.is(SPELL_PAPER)) {
-                    stack = context.player().getOffhandItem();
-                    usedHand = net.minecraft.world.InteractionHand.OFF_HAND;
+                // Validate limits
+                if (payload.strokes().size() > 64) {
+                    LOGGER.warn("Dropping packet: too many strokes ({})", payload.strokes().size());
+                    return;
                 }
+                int totalPoints = 0;
+                for (var stroke : payload.strokes()) {
+                    if (stroke.size() > 512) {
+                        LOGGER.warn("Dropping packet: stroke too large ({})", stroke.size());
+                        return;
+                    }
+                    totalPoints += stroke.size();
+                    for (var p : stroke) {
+                        if (Double.isNaN(p.x) || Double.isNaN(p.y) || Double.isInfinite(p.x) || Double.isInfinite(p.y) || p.x < -0.1 || p.x > 1.1 || p.y < -0.1 || p.y > 1.1) {
+                            LOGGER.warn("Dropping packet: invalid coordinates {}", p);
+                            return;
+                        }
+                    }
+                }
+                if (totalPoints > 8192) {
+                    LOGGER.warn("Dropping packet: too many total points ({})", totalPoints);
+                    return;
+                }
+                
+                int currentRev = sessionRevisions.getOrDefault(payload.sessionId(), -1);
+                if (payload.revision() <= currentRev) {
+                    LOGGER.info("Dropping stale packet (rev {} <= {})", payload.revision(), currentRev);
+                    return;
+                }
+                sessionRevisions.put(payload.sessionId(), payload.revision());
+
+                net.minecraft.world.InteractionHand usedHand = payload.hand();
+                net.minecraft.world.item.ItemStack stack = context.player().getItemInHand(usedHand);
                 
                 if (stack.is(SPELL_PAPER)) {
                     LOGGER.info("Spell drawn packet received, parsing on server...");
@@ -71,7 +102,7 @@ public class WitchHatMod implements ModInitializer {
                     com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(payload.strokes());
                     String compiledSpellString = "";
                     if (result.isValidSpell()) {
-                        compiledSpellString = result.ir.element();
+                        compiledSpellString = result.ir.compiledSpellString();
                         LOGGER.info("Compiled spell: {}", compiledSpellString);
                     } else {
                         LOGGER.info("Invalid or incomplete spell drawn.");

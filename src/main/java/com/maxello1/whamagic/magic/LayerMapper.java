@@ -10,32 +10,33 @@ public class LayerMapper {
         public final List<List<Point>> signStrokes = new ArrayList<>();
     }
 
-    public static LayeredStrokes mapLayers(List<List<Point>> strokes, RingDetector.RingGlyph ring) {
+    public static LayeredStrokes mapLayers(List<List<Point>> strokes, RingDetector.RingDetection detection) {
         LayeredStrokes result = new LayeredStrokes();
         
-        if (ring == null) {
+        if (detection == null || detection.glyph() == null) {
             result.coreStrokes.addAll(strokes);
             return result;
         }
         
-        for (List<Point> stroke : strokes) {
-            // Calculate center of stroke
-            double cx = 0, cy = 0;
-            for (Point p : stroke) { cx += p.x; cy += p.y; }
-            cx /= stroke.size();
-            cy /= stroke.size();
-            
-            double distToCenter = Math.hypot(cx - ring.center().x, cy - ring.center().y);
-            
-            // If the stroke is the ring itself, ignore it
-            // Simple heuristic: if it's very close to the ring radius, it's the ring
-            if (Math.abs(distToCenter - ring.radius()) < ring.radius() * 0.2) {
-                continue; // It's probably the ring stroke
+        RingDetector.RingGlyph ring = detection.glyph();
+        
+        for (int i = 0; i < strokes.size(); i++) {
+            if (detection.ringStrokeIndices().contains(i)) {
+                continue;
             }
             
-            if (distToCenter < ring.radius() * 0.45) {
+            List<Point> stroke = strokes.get(i);
+            
+            // Calculate average radius of the stroke's points from the ring center
+            double avgR = 0;
+            for (Point p : stroke) {
+                avgR += Math.hypot(p.x - ring.center().x, p.y - ring.center().y);
+            }
+            avgR /= stroke.size();
+            
+            if (avgR < ring.radius() * 0.95) {
                 result.coreStrokes.add(stroke);
-            } else if (distToCenter < ring.radius() * 1.1) {
+            } else {
                 result.signStrokes.add(stroke);
             }
         }

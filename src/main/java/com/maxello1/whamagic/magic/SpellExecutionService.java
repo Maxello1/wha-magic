@@ -18,17 +18,26 @@ public class SpellExecutionService {
     public static void execute(Level level, Player player, SpellIr spell) {
         if (!(level instanceof ServerLevel serverLevel)) return;
         
+        String compiledStr = spell.compiledSpellString() != null ? spell.compiledSpellString().toLowerCase() : "";
         String element = spell.element() != null ? spell.element().toLowerCase() : "";
-        String manifestation = spell.manifestation() != null ? spell.manifestation().toLowerCase() : "";
+        
+        String manifestation = "";
+        if (compiledStr.contains("column")) manifestation = "column";
+        else if (compiledStr.contains("levitation")) manifestation = "levitation";
+        else if (compiledStr.contains("convergence")) manifestation = "convergence";
+        
+        double power = 1.0;
+        if (compiledStr.contains(" x2")) power = 2.0;
+        else if (compiledStr.contains(" x3")) power = 3.0;
         
         if (element.equals("water")) {
-            executeWaterColumn(serverLevel, player, spell.power());
+            executeWaterColumn(serverLevel, player, power);
         } else if (element.equals("fire")) {
-            executeFire(serverLevel, player, spell.power());
+            executeFire(serverLevel, player, power);
         } else if (element.equals("wind")) {
-            executeWind(serverLevel, player, spell.power(), manifestation);
+            executeWind(serverLevel, player, power, manifestation);
         } else if (element.equals("earth")) {
-            executeEarth(serverLevel, player, spell.power(), manifestation);
+            executeEarth(serverLevel, player, power, manifestation);
         } else {
             // Generic fallback execution
             serverLevel.sendParticles(ParticleTypes.ENCHANT, player.getX(), player.getY() + 1, player.getZ(), 50, 0.5, 0.5, 0.5, 0.1);

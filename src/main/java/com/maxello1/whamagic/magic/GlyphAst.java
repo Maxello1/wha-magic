@@ -6,5 +6,5 @@ import java.util.List;
 public record GlyphAst(
     RingDetector.RingGlyph ring,
     RecognitionResult primarySigil,
-    List<RecognitionResult> signs
+    List<RecognizedSign> signs
 ) {}

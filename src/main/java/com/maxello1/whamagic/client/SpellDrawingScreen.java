@@ -15,11 +15,15 @@ public class SpellDrawingScreen extends Screen {
     private final List<List<Point>> strokes = new ArrayList<>();
     private List<Point> currentStroke = null;
     private String currentSpellStatus = "";
+    private final java.util.UUID sessionId = java.util.UUID.randomUUID();
+    private int revision = 0;
+    
+    private double canvasX, canvasY, canvasSize;
 
     // Eraser state
     private boolean eraserMode = false;
     private boolean erasing = false;
-    private static final double ERASER_RADIUS = 8.0;
+    private static final double ERASER_RADIUS_NORM = 0.015;
     private double eraserX = 0, eraserY = 0;
 
     public SpellDrawingScreen(InteractionHand hand, List<List<Point>> existingStrokes) {
@@ -32,6 +36,22 @@ public class SpellDrawingScreen extends Screen {
         }
         // Ensure dictionary is loaded on the client
         SpellDictionary.ensureLoaded();
+    }
+
+    @Override
+    protected void init() {
+        super.init();
+        this.canvasSize = Math.max(100, Math.min(this.width, this.height) - 40);
+        this.canvasX = (this.width - this.canvasSize) / 2.0;
+        this.canvasY = (this.height - this.canvasSize) / 2.0;
+    }
+
+    private Point toNormalized(double mouseX, double mouseY) {
+        return new Point((mouseX - canvasX) / canvasSize, (mouseY - canvasY) / canvasSize);
+    }
+    
+    private Point toScreen(Point p) {
+        return new Point(p.x * canvasSize + canvasX, p.y * canvasSize + canvasY);
     }
 
     @Override
@@ -51,7 +71,7 @@ public class SpellDrawingScreen extends Screen {
             } else {
                 // Start drawing
                 currentStroke = new ArrayList<>();
-                currentStroke.add(new Point(event.x(), event.y()));
+                currentStroke.add(toNormalized(event.x(), event.y()));
                 return true;
             }
         }
@@ -60,6 +80,7 @@ public class SpellDrawingScreen extends Screen {
             strokes.clear();
             currentStroke = null;
             currentSpellStatus = "Cleared";
+            revision++;
             return true;
         }
         return super.mouseClicked(event, doubleClick);
@@ -72,7 +93,7 @@ public class SpellDrawingScreen extends Screen {
                 eraseAtPosition(event.x(), event.y());
                 return true;
             } else if (currentStroke != null) {
-                currentStroke.add(new Point(event.x(), event.y()));
+                currentStroke.add(toNormalized(event.x(), event.y()));
                 return true;
             }
         }
@@ -84,12 +105,14 @@ public class SpellDrawingScreen extends Screen {
         if (event.button() == 0) {
             if (eraserMode && erasing) {
                 erasing = false;
+                revision++;
                 reparse();
                 return true;
             } else if (currentStroke != null && !currentStroke.isEmpty()) {
-                currentStroke.add(new Point(event.x(), event.y()));
+                currentStroke.add(toNormalized(event.x(), event.y()));
                 strokes.add(new ArrayList<>(currentStroke));
                 currentStroke.clear();
+                revision++;
                 reparse();
             }
         }
@@ -114,22 +137,23 @@ public class SpellDrawingScreen extends Screen {
     }
 
     /**
-     * Erase all stroke points within ERASER_RADIUS of the given position.
+     * Erase all stroke points within ERASER_RADIUS_NORM of the given position.
      * Strokes that get split in the middle are broken into two sub-strokes.
      * Strokes that become too short (< 2 points) are removed entirely.
      */
     private void eraseAtPosition(double mx, double my) {
         eraserX = mx;
         eraserY = my;
-        double rSq = ERASER_RADIUS * ERASER_RADIUS;
+        Point normMouse = toNormalized(mx, my);
+        double rSq = ERASER_RADIUS_NORM * ERASER_RADIUS_NORM;
         List<List<Point>> newStrokes = new ArrayList<>();
 
         for (List<Point> stroke : strokes) {
             // Walk through the stroke, collecting segments that are outside the eraser
             List<Point> segment = new ArrayList<>();
             for (Point p : stroke) {
-                double dx = p.x - mx;
-                double dy = p.y - my;
+                double dx = p.x - normMouse.x;
+                double dy = p.y - normMouse.y;
                 if (dx * dx + dy * dy <= rSq) {
                     // This point is inside the eraser radius — break the segment
                     if (segment.size() >= 2) {
@@ -159,7 +183,7 @@ public class SpellDrawingScreen extends Screen {
     public void onClose() {
         System.out.println("Sending SpellDrawnPacket with strokes");
         net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(
-                new com.maxello1.whamagic.network.SpellDrawnPacket(strokes));
+                new com.maxello1.whamagic.network.SpellDrawnPacket(sessionId, hand, revision, strokes));
         super.onClose();
     }
 
@@ -181,9 +205,12 @@ public class SpellDrawingScreen extends Screen {
         graphics.text(this.font, modeText, 10, 22, eraserMode ? 0xFFFF8844 : 0xFFAAAAAA);
         graphics.text(this.font, "Strokes: " + strokes.size() + " | Middle-click or E: toggle eraser", 10, 34, 0xFFAAAAAA);
 
+        // Draw Canvas Border
+        graphics.fill((int)canvasX, (int)canvasY, (int)(canvasX + canvasSize), (int)(canvasY + canvasSize), 0x33FFFFFF);
+        
         // Draw eraser cursor
         if (eraserMode) {
-            int r = (int) ERASER_RADIUS;
+            int r = (int) (ERASER_RADIUS_NORM * canvasSize);
             int cx = mouseX;
             int cy = mouseY;
             // Draw a circle outline for the eraser
@@ -199,11 +226,29 @@ public class SpellDrawingScreen extends Screen {
     }
 
     private void drawStroke(net.minecraft.client.gui.GuiGraphicsExtractor graphics, List<Point> stroke, int color) {
-        if (stroke.size() < 2) return;
+        if (stroke.size() < 2) {
+            if (stroke.size() == 1) {
+                Point p = toScreen(stroke.get(0));
+                graphics.fill((int)p.x, (int)p.y, (int)p.x + 2, (int)p.y + 2, color);
+            }
+            return;
+        }
         for (int i = 0; i < stroke.size() - 1; i++) {
-            Point p1 = stroke.get(i);
-            Point p2 = stroke.get(i + 1);
-            graphics.fill((int) p1.x, (int) p1.y, (int) p2.x + 1, (int) p2.y + 1, color);
+            Point p1 = toScreen(stroke.get(i));
+            Point p2 = toScreen(stroke.get(i + 1));
+            
+            // Interpolate line
+            double dx = p2.x - p1.x;
+            double dy = p2.y - p1.y;
+            double dist = Math.hypot(dx, dy);
+            int steps = Math.max(1, (int) Math.ceil(dist));
+            
+            for (int step = 0; step <= steps; step++) {
+                double t = (double) step / steps;
+                int x = (int) (p1.x + dx * t);
+                int y = (int) (p1.y + dy * t);
+                graphics.fill(x, y, x + 2, y + 2, color);
+            }
         }
     }
 

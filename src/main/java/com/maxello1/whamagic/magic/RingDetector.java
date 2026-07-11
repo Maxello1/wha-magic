@@ -5,13 +5,15 @@ import java.util.List;
 
 public class RingDetector {
     public record RingGlyph(Point center, double radius, double completeness, boolean isClosed, double gapAngleDeg) {}
+    public record RingDetection(RingGlyph glyph, java.util.Set<Integer> ringStrokeIndices) {}
 
-    public static RingGlyph detectRing(List<List<Point>> strokes) {
-        List<Point> bestStroke = null;
+    public static RingDetection detectRing(List<List<Point>> strokes) {
+        int bestStrokeIdx = -1;
         double bestRadius = 0;
         Point bestCenter = null;
         
-        for (List<Point> stroke : strokes) {
+        for (int i = 0; i < strokes.size(); i++) {
+            List<Point> stroke = strokes.get(i);
             if (stroke.size() < 10) continue;
             
             // Calculate center
@@ -28,14 +30,16 @@ public class RingDetector {
             }
             avgR /= stroke.size();
             
-            if (avgR > 30.0 && avgR > bestRadius) {
-                bestStroke = stroke;
+            // Normalized radius threshold = 0.08
+            if (avgR > 0.08 && avgR > bestRadius) {
+                bestStrokeIdx = i;
                 bestRadius = avgR;
                 bestCenter = center;
             }
         }
         
-        if (bestStroke == null) return null;
+        if (bestStrokeIdx == -1) return null;
+        List<Point> bestStroke = strokes.get(bestStrokeIdx);
         
         // Measure coverage
         boolean[] bins = new boolean[360];
@@ -68,7 +72,8 @@ public class RingDetector {
         double completeness = filled / 360.0;
         boolean isClosed = completeness > 0.85 && maxGap < 45;
         
-        return new RingGlyph(bestCenter, bestRadius, completeness, isClosed, maxGap);
+        RingGlyph ring = new RingGlyph(bestCenter, bestRadius, completeness, isClosed, maxGap);
+        return new RingDetection(ring, java.util.Set.of(bestStrokeIdx));
     }
     
     private static double distance(Point a, Point b) {

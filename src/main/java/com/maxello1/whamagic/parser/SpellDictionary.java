@@ -91,7 +91,31 @@ public class SpellDictionary {
                     continue;
                 }
 
-                RasterRecognizer.addTemplate(id, displayName, kind, element, strokes);
+                JsonObject semanticObj = entry.has("semantic") ? entry.getAsJsonObject("semantic") : new JsonObject();
+                com.maxello1.whamagic.magic.SigilSemantic sigilSem = null;
+                com.maxello1.whamagic.magic.SignSemantic signSem = null;
+                
+                if ("sigil".equals(kind)) {
+                    sigilSem = new com.maxello1.whamagic.magic.SigilSemantic(
+                        semanticObj.has("force") ? semanticObj.get("force").getAsDouble() : 0,
+                        semanticObj.has("focus") ? semanticObj.get("focus").getAsDouble() : 0,
+                        semanticObj.has("spread") ? semanticObj.get("spread").getAsDouble() : 0,
+                        semanticObj.has("range") ? semanticObj.get("range").getAsDouble() : 0,
+                        semanticObj.has("lifetimeBias") ? semanticObj.get("lifetimeBias").getAsDouble() : 0
+                    );
+                } else if ("sign".equals(kind)) {
+                    signSem = new com.maxello1.whamagic.magic.SignSemantic(
+                        semanticObj.has("manifestation") ? semanticObj.get("manifestation").getAsString() : "none",
+                        semanticObj.has("directionMode") ? semanticObj.get("directionMode").getAsString() : "none",
+                        semanticObj.has("force") ? semanticObj.get("force").getAsDouble() : 0,
+                        semanticObj.has("focus") ? semanticObj.get("focus").getAsDouble() : 0,
+                        semanticObj.has("spread") ? semanticObj.get("spread").getAsDouble() : 0,
+                        semanticObj.has("range") ? semanticObj.get("range").getAsDouble() : 0,
+                        semanticObj.has("lifetimeBias") ? semanticObj.get("lifetimeBias").getAsDouble() : 0
+                    );
+                }
+
+                RasterRecognizer.addTemplate(id, displayName, kind, element, strokes, sigilSem, signSem);
                 count++;
             }
         } catch (Exception e) {

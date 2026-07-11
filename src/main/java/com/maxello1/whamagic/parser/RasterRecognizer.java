@@ -3,6 +3,7 @@ package com.maxello1.whamagic.parser;
 import com.maxello1.whamagic.WitchHatMod;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -37,29 +38,91 @@ public class RasterRecognizer {
         public final String displayName;
         public final String kind; // "sigil" or "sign"
         public final String element;
+        public final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
+        public final com.maxello1.whamagic.magic.SignSemantic signSemantic;
         public final List<List<Point>> rawStrokes;
         public final InkLayers ink; // pre-rendered at load time
         public final TemplateFeatures features;
 
-        public RasterTemplate(String id, String displayName, String kind, String element, List<List<Point>> strokes) {
+        public RasterTemplate(String id, String displayName, String kind, String element, List<List<Point>> strokes,
+                              com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem) {
             this.id = id;
             this.displayName = displayName;
             this.kind = kind;
             this.element = element;
-            // Filter out single-point strokes (decoration markers in the JSON)
+            this.sigilSemantic = sigilSem;
+            this.signSemantic = signSem;
+            
+            // Filter out 1-point decoration markers
             List<List<Point>> filteredStrokes = new ArrayList<>();
             for (List<Point> stroke : strokes) {
                 if (stroke != null && stroke.size() >= 2) {
                     filteredStrokes.add(stroke);
                 }
             }
-            this.rawStrokes = filteredStrokes;
+            
+            // Re-merge contiguous fragments left by SVG tracer
+            this.rawStrokes = mergeFragmentedStrokes(filteredStrokes);
 
-            TemplateNormalizer.NormalizedResult norm = TemplateNormalizer.normalize(filteredStrokes, SAMPLES_PER_STROKE);
+            TemplateNormalizer.NormalizedResult norm = TemplateNormalizer.normalize(this.rawStrokes, SAMPLES_PER_STROKE);
             this.ink = renderInk(norm.strokes, 0);
-            this.features = extractTemplateFeatures(filteredStrokes, norm);
+            this.features = extractTemplateFeatures(this.rawStrokes, norm);
+            
             WitchHatMod.LOGGER.info("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}",
-                    id, filteredStrokes.size(), norm.sourceAspectRatio, this.ink.coreInk);
+                    id, this.rawStrokes.size(), norm.sourceAspectRatio, this.ink.coreInk);
+        }
+
+        private static List<List<Point>> mergeFragmentedStrokes(List<List<Point>> strokes) {
+            if (strokes == null || strokes.isEmpty()) return strokes;
+
+            List<List<Point>> merged = new ArrayList<>();
+            for (List<Point> s : strokes) {
+                merged.add(new ArrayList<>(s));
+            }
+
+            boolean changed;
+            do {
+                changed = false;
+                for (int i = 0; i < merged.size(); i++) {
+                    for (int j = i + 1; j < merged.size(); j++) {
+                        List<Point> s1 = merged.get(i);
+                        List<Point> s2 = merged.get(j);
+
+                        Point s1End = s1.get(s1.size() - 1);
+                        Point s2Start = s2.get(0);
+                        Point s1Start = s1.get(0);
+                        Point s2End = s2.get(s2.size() - 1);
+
+                        double dist1 = Math.hypot(s2Start.x - s1End.x, s2Start.y - s1End.y);
+                        double dist2 = Math.hypot(s1Start.x - s2End.x, s1Start.y - s2End.y);
+                        double dist3 = Math.hypot(s2Start.x - s1Start.x, s2Start.y - s1Start.y);
+                        double dist4 = Math.hypot(s2End.x - s1End.x, s2End.y - s1End.y);
+
+                        double minDist = Math.min(Math.min(dist1, dist2), Math.min(dist3, dist4));
+
+                        if (minDist < 0.05) {
+                            if (minDist == dist1) {
+                                s1.addAll(s2);
+                            } else if (minDist == dist2) {
+                                s2.addAll(s1);
+                                merged.set(i, s2);
+                            } else if (minDist == dist3) {
+                                Collections.reverse(s1);
+                                s1.addAll(s2);
+                            } else {
+                                Collections.reverse(s2);
+                                s1.addAll(s2);
+                            }
+                            merged.remove(j);
+                            changed = true;
+                            break;
+                        }
+                    }
+                    if (changed) break;
+                }
+            } while (changed);
+
+            return merged;
         }
     }
 
@@ -100,21 +163,27 @@ public class RasterRecognizer {
         public final String kind;
         public final String element;
         public final double score;
+        public final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
+        public final com.maxello1.whamagic.magic.SignSemantic signSemantic;
 
-        public RecognitionResult(boolean recognized, String id, String displayName, String kind, String element, double score) {
+        public RecognitionResult(boolean recognized, String id, String displayName, String kind, String element, double score,
+                                 com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem) {
             this.recognized = recognized;
             this.id = id;
             this.displayName = displayName;
             this.kind = kind;
             this.element = element;
             this.score = score;
+            this.sigilSemantic = sigilSem;
+            this.signSemantic = signSem;
         }
     }
 
     // ---- Public API ----
 
-    public static void addTemplate(String id, String displayName, String kind, String element, List<List<Point>> strokes) {
-        templates.add(new RasterTemplate(id, displayName, kind, element, strokes));
+    public static void addTemplate(String id, String displayName, String kind, String element, List<List<Point>> strokes,
+                                   com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem) {
+        templates.add(new RasterTemplate(id, displayName, kind, element, strokes, sigilSem, signSem));
     }
 
     public static void clearTemplates() {
@@ -126,21 +195,21 @@ public class RasterRecognizer {
     }
 
     /**
-     * Recognize drawn strokes against all registered templates.
+     * Recognize drawn strokes against all registered templates of a specific kind.
      * Uses the raster ink overlay + structural feature scoring.
      */
-    public static RecognitionResult recognize(List<List<Point>> strokes) {
+    public static RecognitionResult recognize(List<List<Point>> strokes, String expectedKind, double rotationDeg) {
         if (strokes == null || strokes.isEmpty()) {
-            return new RecognitionResult(false, null, "No strokes", "unknown", null, 0);
+            return new RecognitionResult(false, null, "No strokes", "unknown", null, 0, null, null);
         }
 
         // Normalize candidate strokes
         TemplateNormalizer.NormalizedResult candidateNorm = TemplateNormalizer.normalize(strokes, SAMPLES_PER_STROKE);
         if (candidateNorm.strokes.isEmpty()) {
-            return new RecognitionResult(false, null, "No valid strokes", "unknown", null, 0);
+            return new RecognitionResult(false, null, "No valid strokes", "unknown", null, 0, null, null);
         }
 
-        InkLayers candidateInk = renderInk(candidateNorm.strokes, 0);
+        InkLayers candidateInk = renderInk(candidateNorm.strokes, rotationDeg);
 
         // Extract candidate structural features
         double[] candidateProfile = computeStrokeProfile(strokes);
@@ -153,6 +222,10 @@ public class RasterRecognizer {
         RasterTemplate bestTemplate = null;
 
         for (RasterTemplate template : templates) {
+            if (expectedKind != null && !template.kind.equals(expectedKind)) {
+                continue;
+            }
+            
             // 1) Ink overlap score
             InkScores inkScores = compareInk(candidateInk, template.ink);
 
@@ -195,7 +268,7 @@ public class RasterRecognizer {
         }
 
         if (bestTemplate == null) {
-            return new RecognitionResult(false, null, "No templates", "unknown", null, 0);
+            return new RecognitionResult(false, null, "No templates", "unknown", null, 0, null, null);
         }
 
         // Check ambiguity
@@ -203,11 +276,11 @@ public class RasterRecognizer {
 
         if (bestScore >= MIN_CONFIDENCE && !ambiguous) {
             return new RecognitionResult(true, bestTemplate.id, bestTemplate.displayName,
-                    bestTemplate.kind, bestTemplate.element, bestScore);
+                    bestTemplate.kind, bestTemplate.element, bestScore, bestTemplate.sigilSemantic, bestTemplate.signSemantic);
         } else {
             return new RecognitionResult(false, bestTemplate.id,
                     bestTemplate.displayName + " (" + String.format("%.0f%%", bestScore * 100) + ")",
-                    bestTemplate.kind, bestTemplate.element, bestScore);
+                    bestTemplate.kind, bestTemplate.element, bestScore, bestTemplate.sigilSemantic, bestTemplate.signSemantic);
         }
     }
 
@@ -435,7 +508,12 @@ public class RasterRecognizer {
 
     private static double strokeCountCompatibility(int candidateCount, int templateCount) {
         if (candidateCount == 0 || templateCount == 0) return 0;
-        return clamp(1.0 - (double) Math.abs(candidateCount - templateCount) / Math.max(candidateCount, templateCount));
+        double diff = Math.abs(candidateCount - templateCount);
+        double max = Math.max(candidateCount, templateCount);
+        // Make stroke count penalty much weaker. Connect lines (less strokes) is less penalized.
+        double penalty = diff / max;
+        // Instead of linear 1 - penalty, we use a much softer curve, e.g. 1 - penalty * 0.4
+        return clamp(1.0 - penalty * 0.4);
     }
 
     private static double profileCompatibility(double[] candidateProfile, double[] templateProfile) {

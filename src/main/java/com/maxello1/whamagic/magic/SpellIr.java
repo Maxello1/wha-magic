@@ -5,7 +5,6 @@ public record SpellIr(
     boolean active,
     boolean prepared,
     String element,
-    String manifestation,
-    double power,
+    String compiledSpellString,
     String statusMessage
 ) {}
