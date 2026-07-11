@@ -1,5 +1,16 @@
 # WHA-Magic Changelog
 
+## [0.2.0] - 2026-07-12
+### Added
+- Implemented Multi-Sigil Recognition! The spell parser can now recognize multiple separate sigils and signs within a single drawing and compile them together.
+- Added a Local Recognition Preview (toggle with F3 while drawing) to debug recognized bounding boxes, element types, and signs.
+- Added proper missing textures for the Ink Wand and Spell Paper items.
+
+### Fixed
+- Fixed a bug where drawing a circle slowly would cut off mid-stroke due to strict network point limits (increased point limits).
+- Upgraded the Ring Detector to properly identify spell circles drawn using multiple strokes, seamlessly merging them together.
+- Fixed item definitions to correctly load custom models in modern versions (1.21.4+ / 26.2).
+
 ## [0.1.0] - 2026-07-11
 ### Added
 - Integrated initial spell simulator recognition engine into Minecraft.
