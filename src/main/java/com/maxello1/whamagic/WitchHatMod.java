@@ -12,7 +12,7 @@ import com.mojang.serialization.Codec;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import com.maxello1.whamagic.network.SpellDrawnPacket;
+import com.maxello1.whamagic.network.SaveSpellPayload;
 import com.maxello1.whamagic.network.OpenSpellScreenPayload;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,7 +27,8 @@ public class WitchHatMod implements ModInitializer {
     public static final String MOD_ID = "wha-magic";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-    private static final Map<UUID, Integer> sessionRevisions = new ConcurrentHashMap<>();
+    private static final Map<UUID, Long> parseCooldowns = new ConcurrentHashMap<>();
+    private static final long PARSE_COOLDOWN_TICKS = 10;
 
     public static final ResourceKey<Item> SPELL_PAPER_KEY = ResourceKey.create(Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "spell_paper"));
     public static final Item SPELL_PAPER = new SpellPaperItem(new Item.Properties().setId(SPELL_PAPER_KEY).stacksTo(1));
@@ -58,70 +59,62 @@ public class WitchHatMod implements ModInitializer {
         });
 
         // Networking
-        net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry.serverboundPlay().register(SpellDrawnPacket.ID, SpellDrawnPacket.CODEC);
+        net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry.serverboundPlay().register(SaveSpellPayload.ID, SaveSpellPayload.CODEC);
         net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry.clientboundPlay().register(OpenSpellScreenPayload.ID, OpenSpellScreenPayload.CODEC);
         
-        ServerPlayNetworking.registerGlobalReceiver(SpellDrawnPacket.ID, (payload, context) -> {
+        ServerPlayNetworking.registerGlobalReceiver(SaveSpellPayload.ID, (payload, context) -> {
             context.server().execute(() -> {
-                // Validate limits
-                if (payload.strokes().size() > 64) {
-                    LOGGER.warn("Dropping packet: too many strokes ({})", payload.strokes().size());
-                    return;
-                }
-                int totalPoints = 0;
-                for (var stroke : payload.strokes()) {
-                    if (stroke.size() > 512) {
-                        LOGGER.warn("Dropping packet: stroke too large ({})", stroke.size());
-                        return;
-                    }
-                    totalPoints += stroke.size();
-                    for (var p : stroke) {
-                        if (Double.isNaN(p.x) || Double.isNaN(p.y) || Double.isInfinite(p.x) || Double.isInfinite(p.y) || p.x < -0.1 || p.x > 1.1 || p.y < -0.1 || p.y > 1.1) {
-                            LOGGER.warn("Dropping packet: invalid coordinates {}", p);
-                            return;
-                        }
-                    }
-                }
-                if (totalPoints > 8192) {
-                    LOGGER.warn("Dropping packet: too many total points ({})", totalPoints);
-                    return;
-                }
-                
-                int currentRev = sessionRevisions.getOrDefault(payload.sessionId(), -1);
-                if (payload.revision() <= currentRev) {
-                    LOGGER.info("Dropping stale packet (rev {} <= {})", payload.revision(), currentRev);
-                    return;
-                }
-                sessionRevisions.put(payload.sessionId(), payload.revision());
-
                 net.minecraft.world.InteractionHand usedHand = payload.hand();
                 net.minecraft.world.item.ItemStack stack = context.player().getItemInHand(usedHand);
                 
-                if (stack.is(SPELL_PAPER)) {
-                    LOGGER.info("Spell drawn packet received, parsing on server...");
-                    
-                    // Parse the strokes server-side for authority
-                    com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(payload.strokes());
-                    String compiledSpellString = "";
-                    if (result.isValidSpell()) {
-                        compiledSpellString = result.ir.compiledSpellString();
-                        LOGGER.info("Compiled spell: {}", compiledSpellString);
-                    } else {
-                        LOGGER.info("Invalid or incomplete spell drawn.");
-                    }
-                    
-                    net.minecraft.world.item.ItemStack newStack = stack.copy();
-                    newStack.set(SPELL_COMPONENT, compiledSpellString);
-                    newStack.set(STROKES_COMPONENT, payload.strokes());
-                    context.player().setItemInHand(usedHand, newStack);
-                    context.player().getInventory().setChanged();
-                    if (context.player() instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
-                        serverPlayer.inventoryMenu.broadcastChanges();
-                    }
-                    LOGGER.info("Item updated in hand.");
-                } else {
-                    LOGGER.warn("Player is not holding spell paper.");
+                if (!stack.is(SPELL_PAPER)) {
+                    LOGGER.warn("Player {} is not holding spell paper.", context.player().getName().getString());
+                    return;
                 }
+
+                // Verify Ink Wand
+                boolean hasWand = false;
+                for (int i = 0; i < context.player().getInventory().getContainerSize(); i++) {
+                    if (context.player().getInventory().getItem(i).is(INK_WAND)) {
+                        hasWand = true;
+                        break;
+                    }
+                }
+                if (!hasWand && !context.player().getAbilities().instabuild) {
+                    LOGGER.warn("Player {} tried to save a spell without an Ink Wand.", context.player().getName().getString());
+                    return;
+                }
+
+                // Rate limiting
+                long currentTick = context.server().getTickCount();
+                long lastTick = parseCooldowns.getOrDefault(context.player().getUUID(), 0L);
+                if (currentTick - lastTick < PARSE_COOLDOWN_TICKS) {
+                    LOGGER.warn("Player {} is parsing spells too frequently.", context.player().getName().getString());
+                    return;
+                }
+                parseCooldowns.put(context.player().getUUID(), currentTick);
+
+                LOGGER.info("Spell drawn packet received, parsing on server...");
+                
+                // Parse the strokes server-side for authority
+                com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(payload.strokes());
+                String compiledSpellString = "";
+                if (result.isValidSpell()) {
+                    compiledSpellString = result.ir.compiledSpellString();
+                    LOGGER.info("Compiled spell: {}", compiledSpellString);
+                } else {
+                    LOGGER.info("Invalid or incomplete spell drawn.");
+                }
+                
+                net.minecraft.world.item.ItemStack newStack = stack.copy();
+                newStack.set(SPELL_COMPONENT, compiledSpellString);
+                newStack.set(STROKES_COMPONENT, payload.strokes());
+                context.player().setItemInHand(usedHand, newStack);
+                context.player().getInventory().setChanged();
+                if (context.player() instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+                    serverPlayer.inventoryMenu.broadcastChanges();
+                }
+                LOGGER.info("Item updated in hand.");
             });
         });
 

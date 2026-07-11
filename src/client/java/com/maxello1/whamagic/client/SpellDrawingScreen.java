@@ -15,8 +15,6 @@ public class SpellDrawingScreen extends Screen {
     private final List<List<Point>> strokes = new ArrayList<>();
     private List<Point> currentStroke = null;
     private String currentSpellStatus = "";
-    private final java.util.UUID sessionId = java.util.UUID.randomUUID();
-    private int revision = 0;
     
     private double canvasX, canvasY, canvasSize;
 
@@ -80,7 +78,6 @@ public class SpellDrawingScreen extends Screen {
             strokes.clear();
             currentStroke = null;
             currentSpellStatus = "Cleared";
-            revision++;
             return true;
         }
         return super.mouseClicked(event, doubleClick);
@@ -105,14 +102,12 @@ public class SpellDrawingScreen extends Screen {
         if (event.button() == 0) {
             if (eraserMode && erasing) {
                 erasing = false;
-                revision++;
                 reparse();
                 return true;
             } else if (currentStroke != null && !currentStroke.isEmpty()) {
                 currentStroke.add(toNormalized(event.x(), event.y()));
                 strokes.add(new ArrayList<>(currentStroke));
                 currentStroke.clear();
-                revision++;
                 reparse();
             }
         }
@@ -181,9 +176,9 @@ public class SpellDrawingScreen extends Screen {
 
     @Override
     public void onClose() {
-        System.out.println("Sending SpellDrawnPacket with strokes");
+        System.out.println("Sending SaveSpellPayload with strokes");
         net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(
-                new com.maxello1.whamagic.network.SpellDrawnPacket(sessionId, hand, revision, strokes));
+                new com.maxello1.whamagic.network.SaveSpellPayload(hand, strokes));
         super.onClose();
     }
 

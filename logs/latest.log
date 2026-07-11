@@ -1,10 +1,10 @@
-[03:49:01] [Test worker/INFO]: Loaded raster template 'fire': 3 strokes, aspect=0.874, coreInk=362
-[03:49:01] [Test worker/INFO]: Loaded raster template 'water': 4 strokes, aspect=0.812, coreInk=375
-[03:49:01] [Test worker/INFO]: Loaded raster template 'wind-directs-air': 7 strokes, aspect=1.179, coreInk=436
-[03:49:01] [Test worker/INFO]: Loaded raster template 'earth': 10 strokes, aspect=1.529, coreInk=315
-[03:49:01] [Test worker/INFO]: Loaded raster template 'light': 7 strokes, aspect=0.984, coreInk=482
-[03:49:01] [Test worker/INFO]: Loaded raster template 'column': 2 strokes, aspect=0.941, coreInk=192
-[03:49:01] [Test worker/INFO]: Loaded raster template 'levitation': 3 strokes, aspect=0.941, coreInk=304
-[03:49:01] [Test worker/INFO]: Loaded raster template 'convergence': 11 strokes, aspect=1.111, coreInk=349
-[03:49:01] [Test worker/INFO]: SpellDictionary loaded: 5 sigils, 3 signs (8 total templates)
-[03:49:01] [Test worker/INFO]: [STDOUT]: No json fixtures found.
+[03:51:20] [Test worker/INFO]: Loaded raster template 'fire': 3 strokes, aspect=0.874, coreInk=362
+[03:51:20] [Test worker/INFO]: Loaded raster template 'water': 4 strokes, aspect=0.812, coreInk=375
+[03:51:20] [Test worker/INFO]: Loaded raster template 'wind-directs-air': 7 strokes, aspect=1.179, coreInk=436
+[03:51:20] [Test worker/INFO]: Loaded raster template 'earth': 10 strokes, aspect=1.529, coreInk=315
+[03:51:20] [Test worker/INFO]: Loaded raster template 'light': 7 strokes, aspect=0.984, coreInk=482
+[03:51:20] [Test worker/INFO]: Loaded raster template 'column': 2 strokes, aspect=0.941, coreInk=192
+[03:51:20] [Test worker/INFO]: Loaded raster template 'levitation': 3 strokes, aspect=0.941, coreInk=304
+[03:51:20] [Test worker/INFO]: Loaded raster template 'convergence': 11 strokes, aspect=1.111, coreInk=349
+[03:51:20] [Test worker/INFO]: SpellDictionary loaded: 5 sigils, 3 signs (8 total templates)
+[03:51:20] [Test worker/INFO]: [STDOUT]: No json fixtures found.
