@@ -28,7 +28,6 @@ public class WitchHatMod implements ModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
     private static final Map<UUID, Long> parseCooldowns = new ConcurrentHashMap<>();
-    private static final long PARSE_COOLDOWN_TICKS = 10;
 
     public static final ResourceKey<Item> SPELL_PAPER_KEY = ResourceKey.create(Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "spell_paper"));
     public static final Item SPELL_PAPER = new SpellPaperItem(new Item.Properties().setId(SPELL_PAPER_KEY).stacksTo(1));
@@ -58,6 +57,9 @@ public class WitchHatMod implements ModInitializer {
             content.accept(INK_WAND);
         });
 
+        // Load Config
+        com.maxello1.whamagic.config.WhaServerConfig.load();
+
         // Networking
         net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry.serverboundPlay().register(SaveSpellPayload.ID, SaveSpellPayload.CODEC);
         net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry.clientboundPlay().register(OpenSpellScreenPayload.ID, OpenSpellScreenPayload.CODEC);
@@ -85,10 +87,9 @@ public class WitchHatMod implements ModInitializer {
                     return;
                 }
 
-                // Rate limiting
                 long currentTick = context.server().getTickCount();
                 long lastTick = parseCooldowns.getOrDefault(context.player().getUUID(), 0L);
-                if (currentTick - lastTick < PARSE_COOLDOWN_TICKS) {
+                if (currentTick - lastTick < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.parseCooldownTicks) {
                     LOGGER.warn("Player {} is parsing spells too frequently.", context.player().getName().getString());
                     return;
                 }
