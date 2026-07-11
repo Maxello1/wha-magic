@@ -1,6 +1,6 @@
 {
   "parent": "item/generated",
   "textures": {
-    "layer0": "wha-magic:item/ink_wand"
+    "layer0": "wha-magic:item/spell_paper"
   }
 }
