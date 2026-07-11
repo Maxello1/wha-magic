@@ -1,21 +1,134 @@
-MIT License
+WHA MAGIC RESTRICTED USE LICENSE
+Version 1.0 – July 2026
 
-Copyright (c) 2026 Maxello1
+Copyright (c) 2026 Maxello1. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This license applies to the WHA Magic Minecraft mod, including its original source code, compiled binaries, assets, configuration files, documentation, and other materials contained in this repository or distributed as part of the project, except for third-party components identified separately.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+## 1. Definitions
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+“Software” means the WHA Magic project and all original files distributed with it.
+
+“Unmodified Software” means an official compiled release of the Software distributed by Maxello1 that has not been altered, patched, decompiled, recompiled, or otherwise modified.
+
+“Server” means a Minecraft server, including a private, public, community, or commercial Minecraft server.
+
+“Modpack” means a collection of Minecraft mods distributed together without modifying the contents of the individual WHA Magic JAR file.
+
+## 2. Permission to Use
+
+You are granted a limited, non-exclusive, revocable, non-transferable license to:
+
+a. download and run the Unmodified Software;
+
+b. install and use the Unmodified Software on Minecraft clients and Servers;
+
+c. use the Unmodified Software on private, public, community, or commercial Minecraft Servers;
+
+d. include and redistribute the unmodified official WHA Magic JAR file as part of a Minecraft modpack, provided that:
+
+* the WHA Magic JAR remains completely unmodified;
+* this license and all copyright notices remain intact;
+* the project is not represented as being created, maintained, or endorsed by anyone other than its actual authors;
+* recipients are provided with a link or clear reference to the official WHA Magic project page;
+
+e. combine the Unmodified Software with other independently developed Minecraft mods, plugins, datapacks, resource packs, server configurations, scripts, or modpack content;
+
+f. create and distribute configuration files, datapacks, resource packs, compatibility data, or other external content that interacts with the Software through its publicly supported configuration or integration systems, provided that such content does not contain copied source code, modified Software files, or a modified WHA Magic JAR.
+
+## 3. Prohibited Actions
+
+Without prior written permission from Maxello1, you may not:
+
+a. modify, adapt, translate, patch, alter, or create derivative works based on the Software;
+
+b. distribute, publish, upload, share, or make available any modified version of the Software;
+
+c. compile and distribute your own modified build of the Software;
+
+d. copy, reuse, incorporate, port, or adapt any original source code from the Software into another Minecraft mod, plugin, project, library, application, or product;
+
+e. use the Software or its source code as the basis for a competing or replacement implementation;
+
+f. remove, conceal, or alter copyright notices, license notices, attribution, credits, or project-identifying information;
+
+g. represent an unofficial build, fork, or derivative project as an official WHA Magic release;
+
+h. sell, sublicense, rent, or separately monetize access to the Software itself;
+
+i. redistribute the Software as a standalone download outside an approved modpack or official distribution platform without written permission;
+
+j. use the project name, branding, logo, or other identifying assets in a way that suggests official endorsement or affiliation.
+
+## 4. Private Modification
+
+No permission is granted to modify the Software, including for private use, development, experimentation, or internal server use, unless prior written permission is obtained from Maxello1.
+
+This restriction does not prohibit ordinary configuration through supported configuration files, datapacks, resource packs, APIs, or other integration mechanisms intentionally provided by the Software.
+
+Nothing in this license restricts rights that cannot legally be restricted under applicable law.
+
+## 5. Server and Modpack Monetization
+
+You may operate a Server or distribute a modpack containing the Unmodified Software, including a monetized Server or modpack, provided that:
+
+* the Software itself is not sold or placed behind a separate paywall;
+* users are not charged specifically for access to WHA Magic;
+* monetization complies with all applicable Minecraft and platform rules;
+* no endorsement by Maxello1 is implied.
+
+This permission does not grant any rights to Witch Hat Atelier names, characters, artwork, trademarks, or other intellectual property owned by their respective rights holders.
+
+## 6. Permission Requests
+
+Permission for modifications, forks, ports, code reuse, compatibility patches, modified distributions, or other uses not expressly allowed by this license may be requested directly from Maxello1.
+
+Permission is valid only when granted in writing and may be subject to additional conditions.
+
+## 7. Contributions
+
+Unless another written agreement is made, submitting source code, assets, documentation, or other contributions to the project grants Maxello1 a perpetual, worldwide, irrevocable, royalty-free license to use, reproduce, modify, distribute, sublicense, and relicense the contribution as part of the Software.
+
+Contributors retain copyright in their original contributions unless copyright is separately assigned in writing.
+
+## 8. Third-Party Components
+
+This license applies only to material for which Maxello1 owns or controls the necessary rights.
+
+Third-party software, algorithms, assets, libraries, or code included in or used by the Software remain subject to their respective licenses. Those licenses and notices are listed in the project’s THIRD_PARTY_NOTICES.md file or accompanying documentation.
+
+Where a third-party license grants broader rights than this license, those broader rights continue to apply only to the relevant third-party material.
+
+## 9. Termination
+
+Your rights under this license terminate automatically if you violate any of its terms.
+
+Upon termination, you must stop using and distributing the Software and remove all unauthorized copies under your control.
+
+Sections concerning ownership, prohibited use, warranty, liability, and third-party rights survive termination.
+
+## 10. Ownership
+
+The Software is licensed, not sold.
+
+Except for the limited permissions expressly granted in this license, all rights, title, and interest in the Software are reserved by Maxello1 and the applicable copyright holders.
+
+No implied licenses are granted.
+
+## 11. Disclaimer of Warranty
+
+THE SOFTWARE IS PROVIDED “AS IS” AND WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+USE OF THE SOFTWARE IS ENTIRELY AT YOUR OWN RISK.
+
+## 12. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, MAXELLO1 AND THE SOFTWARE’S CONTRIBUTORS SHALL NOT BE LIABLE FOR ANY CLAIM, LOSS, DAMAGE, DATA LOSS, SERVER INTERRUPTION, LOST PROFITS, OR OTHER LIABILITY ARISING FROM OR RELATED TO THE SOFTWARE OR ITS USE.
+
+## 13. Fan-Project Disclaimer
+
+WHA Magic is an unofficial fan-made project.
+
+It is not affiliated with, approved by, sponsored by, or endorsed by the creators, publishers, or rights holders of Witch Hat Atelier or by Mojang Studios or Microsoft.
+
+Minecraft is a trademark of Microsoft Corporation. Witch Hat Atelier and related intellectual property belong to their respective rights holders.
