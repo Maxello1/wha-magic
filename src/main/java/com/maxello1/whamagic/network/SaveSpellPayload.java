@@ -27,7 +27,7 @@ public record SaveSpellPayload(
             InteractionHand hand = InteractionHand.values()[handId];
 
             int numStrokes = buf.readInt();
-            if (numStrokes > 64) {
+            if (numStrokes > com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxStrokes) {
                 throw new IllegalArgumentException("Too many strokes: " + numStrokes);
             }
             if (numStrokes < 0) {
@@ -39,7 +39,7 @@ public record SaveSpellPayload(
 
             for (int i = 0; i < numStrokes; i++) {
                 int numPoints = buf.readInt();
-                if (numPoints > 512) {
+                if (numPoints > com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxPointsPerStroke) {
                     throw new IllegalArgumentException("Too many points in stroke: " + numPoints);
                 }
                 if (numPoints < 2) {
@@ -47,7 +47,7 @@ public record SaveSpellPayload(
                 }
 
                 totalPoints += numPoints;
-                if (totalPoints > 8192) {
+                if (totalPoints > com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxTotalPoints) {
                     throw new IllegalArgumentException("Too many total points: " + totalPoints);
                 }
 

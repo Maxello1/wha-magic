@@ -116,7 +116,7 @@ public class SpellDrawingScreen extends Screen {
                 erasing = true;
                 eraseAtPosition(event.x(), event.y());
                 return true;
-            } else if (isInsideCanvas(event.x(), event.y())) {
+            } else if (isInsideCanvas(event.x(), event.y()) && strokes.size() < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxStrokes) {
                 saveState();
                 currentStroke = new ArrayList<>();
                 currentStroke.add(toNormalized(event.x(), event.y()));
@@ -141,7 +141,9 @@ public class SpellDrawingScreen extends Screen {
                 eraseAtPosition(event.x(), event.y());
                 return true;
             } else if (currentStroke != null) {
-                if (isInsideCanvas(event.x(), event.y())) {
+                int totalPoints = currentStroke.size();
+                for (List<Point> s : strokes) totalPoints += s.size();
+                if (isInsideCanvas(event.x(), event.y()) && currentStroke.size() < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxPointsPerStroke && totalPoints < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxTotalPoints) {
                     currentStroke.add(toNormalized(event.x(), event.y()));
                 }
                 return true;
@@ -158,7 +160,9 @@ public class SpellDrawingScreen extends Screen {
                 reparse();
                 return true;
             } else if (currentStroke != null) {
-                if (isInsideCanvas(event.x(), event.y())) {
+                int totalPoints = currentStroke.size();
+                for (List<Point> s : strokes) totalPoints += s.size();
+                if (isInsideCanvas(event.x(), event.y()) && currentStroke.size() < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxPointsPerStroke && totalPoints < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxTotalPoints) {
                     currentStroke.add(toNormalized(event.x(), event.y()));
                 }
                 if (currentStroke.size() >= 2) {
