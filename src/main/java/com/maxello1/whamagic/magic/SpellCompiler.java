@@ -9,16 +9,23 @@ import java.util.stream.Collectors;
 public class SpellCompiler {
     public static SpellIr compile(GlyphAst ast) {
         if (ast.ring() == null) {
-            String msg = ast.primarySigil() != null ? "Drafting: " + ast.primarySigil().displayName : "Drafting: Needs Ring";
-            return new SpellIr(SpellState.INVALID, GlyphWarning.MISSING_RING, null, null, null, null, null, msg);
+            String msg = (ast.sigils() != null && !ast.sigils().isEmpty()) ? "Drafting: " + ast.sigils().get(0).id().getPath() : "Drafting: Needs Ring";
+            return new SpellIr(SpellState.INVALID, GlyphWarning.MISSING_RING, List.of(), Map.of(), null, List.of(), "", msg);
         }
         
-        if (ast.primarySigil() == null) {
-            return new SpellIr(SpellState.INVALID, GlyphWarning.MISSING_CORE_SIGIL, null, null, null, null, null, "Drafting: Missing Core Sigil");
+        if (ast.sigils() == null || ast.sigils().isEmpty()) {
+            return new SpellIr(SpellState.INVALID, GlyphWarning.MISSING_CORE_SIGIL, List.of(), Map.of(), null, List.of(), "", "Drafting: Missing Core Sigil");
         }
         
-        if (!ast.primarySigil().recognized) {
-            return new SpellIr(SpellState.INVALID, GlyphWarning.UNRECOGNIZED_CORE_SIGIL, null, null, null, null, null, "Drafting: Unrecognized Core Sigil");
+        List<ElementType> elements = new ArrayList<>();
+        List<String> displayNames = new ArrayList<>();
+        SigilSemantic primarySemantic = null;
+        
+        for (RecognizedSigil sigil : ast.sigils()) {
+            if (sigil.element() != null) {
+                elements.add(sigil.element());
+            }
+            displayNames.add(sigil.alternatives().isEmpty() ? sigil.id().getPath() : sigil.alternatives().get(0).displayName());
         }
         
         boolean isClosed = ast.ring().isClosed();
@@ -35,16 +42,17 @@ public class SpellCompiler {
             warning = GlyphWarning.WEAK_RING;
         }
         
-        String element = ast.primarySigil().element != null ? ast.primarySigil().element : ast.primarySigil().id;
-        
-        Map<String, Integer> signCounts = new LinkedHashMap<>();
+        Map<net.minecraft.resources.Identifier, Integer> signCounts = new LinkedHashMap<>();
         List<SignSemantic> signSemantics = new ArrayList<>();
         boolean invalidSigns = false;
         
         if (ast.signs() != null) {
             for (RecognizedSign sign : ast.signs()) {
                 if (sign.semantic() != null) {
-                    signCounts.put(sign.id(), signCounts.getOrDefault(sign.id(), 0) + 1);
+                    net.minecraft.resources.Identifier signId = net.minecraft.resources.Identifier.tryParse(sign.id());
+                    if (signId != null) {
+                        signCounts.put(signId, signCounts.getOrDefault(signId, 0) + 1);
+                    }
                     signSemantics.add(sign.semantic());
                 } else {
                     invalidSigns = true;
@@ -56,10 +64,10 @@ public class SpellCompiler {
             warning = GlyphWarning.INVALID_SIGNS;
         }
         
-        String displayName = ast.primarySigil().displayName;
+        String displayName = String.join(" + ", displayNames);
         if (!signCounts.isEmpty()) {
             displayName += " [" + signCounts.entrySet().stream()
-                .map(e -> e.getKey() + " x" + e.getValue())
+                .map(e -> e.getKey().getPath() + " x" + e.getValue())
                 .collect(Collectors.joining(", ")) + "]";
         }
         
@@ -76,6 +84,6 @@ public class SpellCompiler {
             statusMessage += " (" + warning.name() + ")";
         }
         
-        return new SpellIr(state, warning, element, signCounts, ast.primarySigil().sigilSemantic, signSemantics, displayName, statusMessage);
+        return new SpellIr(state, warning, elements, signCounts, primarySemantic, signSemantics, displayName, statusMessage);
     }
 }

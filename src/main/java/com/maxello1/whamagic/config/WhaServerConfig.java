@@ -39,7 +39,7 @@ public class WhaServerConfig {
 
         public static class Network {
             public int maxStrokes = 64;
-            public int maxPointsPerStroke = 512;
+            public int maxPointsPerStroke = 2048;
             public int maxTotalPoints = 8192;
             public int parseCooldownTicks = 10;
         }

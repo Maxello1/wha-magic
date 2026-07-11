@@ -1,13 +1,14 @@
 package com.maxello1.whamagic.magic;
 
+import net.minecraft.resources.Identifier;
 import java.util.List;
 import java.util.Map;
 
 public record SpellIr(
     SpellState state,
     GlyphWarning warning,
-    String element,
-    Map<String, Integer> signCounts,
+    List<ElementType> elements,
+    Map<Identifier, Integer> signCounts,
     SigilSemantic sigilSemantic,
     List<SignSemantic> signSemantics,
     String displayName,

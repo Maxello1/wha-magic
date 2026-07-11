@@ -31,6 +31,7 @@ public class SpellDrawingScreen extends Screen {
     // Debug
     private boolean showDebugOverlay = false;
     private String parserDebugInfo = "";
+    private com.maxello1.whamagic.parser.SpellParser.ParseResult lastParseResult = null;
 
     public SpellDrawingScreen(InteractionHand hand, List<List<Point>> existingStrokes) {
         super(Component.literal("Draw Spell"));
@@ -238,12 +239,13 @@ public class SpellDrawingScreen extends Screen {
         if (strokes.isEmpty()) {
             currentSpellStatus = "Cleared";
             parserDebugInfo = "";
+            lastParseResult = null;
             return;
         }
-        com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
-        currentSpellStatus = result.ir.statusMessage();
-        if (result.isValidSpell()) {
-            parserDebugInfo = "Valid: " + result.ir.displayName();
+        lastParseResult = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
+        currentSpellStatus = lastParseResult.ir.statusMessage();
+        if (lastParseResult.isValidSpell()) {
+            parserDebugInfo = "Valid: " + lastParseResult.ir.displayName();
         } else {
             parserDebugInfo = "Invalid or Incomplete";
         }
@@ -285,6 +287,68 @@ public class SpellDrawingScreen extends Screen {
         if (showDebugOverlay) {
             graphics.text(this.font, "Debug: " + parserDebugInfo, 10, 46, 0xFFFFFF00);
             graphics.text(this.font, String.format("Mouse Norm: %.3f, %.3f", toNormalized(mouseX, mouseY).x, toNormalized(mouseX, mouseY).y), 10, 58, 0xFFFFFF00);
+            
+            if (lastParseResult != null && lastParseResult.debugResult != null) {
+                // Draw candidate bounding boxes in gray
+                for (com.maxello1.whamagic.magic.SymbolCandidate cand : lastParseResult.debugResult.generatedCandidates()) {
+                    if (cand.bounds() != null) {
+                        int x1 = (int)(cand.bounds().minX() * canvasSize + canvasX);
+                        int y1 = (int)(cand.bounds().minY() * canvasSize + canvasY);
+                        int x2 = (int)(cand.bounds().maxX() * canvasSize + canvasX);
+                        int y2 = (int)(cand.bounds().maxY() * canvasSize + canvasY);
+                        drawRectOutline(graphics, x1, y1, x2, y2, 0x55AAAAAA);
+                    }
+                }
+                
+                // Draw selected candidates bounding boxes in green
+                for (com.maxello1.whamagic.magic.SymbolCandidate cand : lastParseResult.debugResult.selectedCandidates()) {
+                    if (cand.bounds() != null) {
+                        int x1 = (int)(cand.bounds().minX() * canvasSize + canvasX);
+                        int y1 = (int)(cand.bounds().minY() * canvasSize + canvasY);
+                        int x2 = (int)(cand.bounds().maxX() * canvasSize + canvasX);
+                        int y2 = (int)(cand.bounds().maxY() * canvasSize + canvasY);
+                        drawRectOutline(graphics, x1, y1, x2, y2, 0xFF00FF00);
+                    }
+                }
+                
+                // Render sigil IDs and element colors
+                if (lastParseResult.ast != null && lastParseResult.ast.sigils() != null) {
+                    for (com.maxello1.whamagic.magic.RecognizedSigil sigil : lastParseResult.ast.sigils()) {
+                        if (sigil.bounds() != null) {
+                            int x1 = (int)(sigil.bounds().minX() * canvasSize + canvasX);
+                            int y1 = (int)(sigil.bounds().minY() * canvasSize + canvasY);
+                            int x2 = (int)(sigil.bounds().maxX() * canvasSize + canvasX);
+                            int y2 = (int)(sigil.bounds().maxY() * canvasSize + canvasY);
+                            
+                            int color = 0xFF88CCFF;
+                            if (sigil.element() != null) {
+                                switch (sigil.element()) {
+                                    case FIRE: color = 0xFFFF5555; break;
+                                    case WATER: color = 0xFF5555FF; break;
+                                    case EARTH: color = 0xFF55FF55; break;
+                                    case WIND: color = 0xFFFFFF55; break;
+                                    case LIGHT: color = 0xFFFF55FF; break;
+                                }
+                            }
+                            drawRectOutline(graphics, x1, y1, x2, y2, color);
+                            graphics.text(this.font, sigil.id() != null ? sigil.id().getPath() : "unknown", x1, y1 - 10, color);
+                        }
+                    }
+                }
+                
+                // Render sign IDs
+                if (lastParseResult.ast != null && lastParseResult.ast.signs() != null) {
+                    for (com.maxello1.whamagic.magic.RecognizedSign sign : lastParseResult.ast.signs()) {
+                        // Position based on angle
+                        double rad = Math.toRadians(sign.angleAroundRing());
+                        int cx = (int)(canvasX + canvasSize / 2);
+                        int cy = (int)(canvasY + canvasSize / 2);
+                        int px = cx + (int)(Math.cos(rad) * canvasSize * 0.4);
+                        int py = cy + (int)(Math.sin(rad) * canvasSize * 0.4);
+                        graphics.text(this.font, sign.id(), px, py, 0xFF00FF00);
+                    }
+                }
+            }
         }
 
         // Draw eraser cursor
@@ -302,6 +366,13 @@ public class SpellDrawingScreen extends Screen {
         }
 
         super.extractRenderState(graphics, mouseX, mouseY, delta);
+    }
+
+    private void drawRectOutline(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int x1, int y1, int x2, int y2, int color) {
+        graphics.fill(x1, y1, x2, y1 + 1, color);
+        graphics.fill(x1, y2 - 1, x2, y2, color);
+        graphics.fill(x1, y1, x1 + 1, y2, color);
+        graphics.fill(x2 - 1, y1, x2, y2, color);
     }
 
     private void drawStroke(net.minecraft.client.gui.GuiGraphicsExtractor graphics, List<Point> stroke, int color) {

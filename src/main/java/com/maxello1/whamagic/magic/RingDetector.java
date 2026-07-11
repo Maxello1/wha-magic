@@ -3,31 +3,68 @@ package com.maxello1.whamagic.magic;
 import com.maxello1.whamagic.parser.Point;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class RingDetector {
     public record RingGlyph(Point center, double radius, double completeness, boolean isClosed, double gapAngleDeg, double rmse) {}
     public record RingDetection(RingGlyph glyph, java.util.Set<Integer> ringStrokeIndices) {}
 
     public static RingDetection detectRing(List<List<Point>> strokes) {
-        int bestStrokeIdx = -1;
+        Set<Integer> bestStrokes = null;
         RingGlyph bestGlyph = null;
+        double bestScore = -1;
         
-        for (int i = 0; i < strokes.size(); i++) {
-            List<Point> resampled = resample(strokes.get(i), 0.025);
-            if (resampled.size() < 10) continue;
+        int n = strokes.size();
+        // Test combinations up to 4 strokes to form a ring
+        int maxK = Math.min(n, 4);
+        
+        // Pre-resample to save time
+        List<List<Point>> resampledStrokes = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            resampledStrokes.add(resample(strokes.get(i), 0.025));
+        }
+        
+        for (int k = 1; k <= maxK; k++) {
+            List<List<Integer>> combos = new ArrayList<>();
+            generateCombinations(n, k, 0, new ArrayList<>(), combos);
             
-            RingGlyph glyph = fitCircle(resampled, 45, 0.05);
-            if (glyph != null && glyph.radius > 0.08 && glyph.radius < 0.8 && glyph.completeness > 0.5) {
-                if (bestGlyph == null || glyph.completeness > bestGlyph.completeness) {
-                    bestGlyph = glyph;
-                    bestStrokeIdx = i;
+            for (List<Integer> combo : combos) {
+                List<Point> combined = new ArrayList<>();
+                for (int idx : combo) {
+                    combined.addAll(resampledStrokes.get(idx));
+                }
+                
+                if (combined.size() < 10) continue;
+                
+                RingGlyph glyph = fitCircle(combined, 45, 0.05);
+                if (glyph != null && glyph.radius > 0.08 && glyph.radius < 0.8 && glyph.completeness > 0.5) {
+                    // Favor completeness, heavily penalize RMSE, penalize using extra strokes slightly
+                    double score = glyph.completeness - (glyph.rmse * 5.0) - (k * 0.01);
+                    if (bestGlyph == null || score > bestScore) {
+                        bestGlyph = glyph;
+                        bestStrokes = new HashSet<>(combo);
+                        bestScore = score;
+                    }
                 }
             }
         }
         
-        if (bestStrokeIdx == -1 || bestGlyph == null) return null;
-        return new RingDetection(bestGlyph, java.util.Set.of(bestStrokeIdx));
+        if (bestStrokes == null || bestGlyph == null) return null;
+        return new RingDetection(bestGlyph, bestStrokes);
+    }
+    
+    private static void generateCombinations(int n, int k, int start, List<Integer> current, List<List<Integer>> result) {
+        if (current.size() == k) {
+            result.add(new ArrayList<>(current));
+            return;
+        }
+        for (int i = start; i < n; i++) {
+            current.add(i);
+            generateCombinations(n, k, i + 1, current, result);
+            current.remove(current.size() - 1);
+        }
     }
     
     private static RingGlyph fitCircle(List<Point> pts, double maxGapDeg, double maxRmse) {

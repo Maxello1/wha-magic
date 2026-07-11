@@ -31,7 +31,8 @@ public class SpellExecutionService {
     public static void execute(Level level, Player player, SpellIr spell) {
         if (!(level instanceof ServerLevel serverLevel)) return;
         
-        String element = spell.element() != null ? spell.element().toLowerCase() : "";
+        List<ElementType> elements = spell.elements() != null ? spell.elements() : List.of();
+        String primaryElement = elements.isEmpty() ? "" : elements.get(0).name().toLowerCase();
         
         ManifestationModifier modifier = ManifestationModifier.NONE;
         double power = 1.0;
@@ -52,11 +53,17 @@ public class SpellExecutionService {
             }
         }
         
-        ElementEffect effect = EFFECTS.get(element);
+        if (elements.size() > 1) {
+            serverLevel.sendParticles(ParticleTypes.ENCHANT, player.getX(), player.getY() + 1, player.getZ(), 50, 0.5, 0.5, 0.5, 0.1);
+            serverLevel.sendParticles(ParticleTypes.SPLASH, player.getX(), player.getY() + 1, player.getZ(), 50, 0.5, 0.5, 0.5, 0.1);
+            serverLevel.sendParticles(ParticleTypes.CLOUD, player.getX(), player.getY() + 1, player.getZ(), 20, 0.5, 0.5, 0.5, 0.1);
+            return;
+        }
+
+        ElementEffect effect = EFFECTS.get(primaryElement);
         if (effect != null) {
             effect.apply(serverLevel, player, power, modifier);
         } else {
-            // Generic fallback execution
             serverLevel.sendParticles(ParticleTypes.ENCHANT, player.getX(), player.getY() + 1, player.getZ(), 50, 0.5, 0.5, 0.5, 0.1);
         }
     }
