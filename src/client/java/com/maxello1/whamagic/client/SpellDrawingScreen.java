@@ -5,9 +5,9 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
 import com.maxello1.whamagic.parser.Point;
 import com.maxello1.whamagic.parser.SpellDictionary;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 
 public class SpellDrawingScreen extends Screen {
@@ -23,14 +23,21 @@ public class SpellDrawingScreen extends Screen {
     private boolean erasing = false;
     private static final double ERASER_RADIUS_NORM = 0.015;
     private double eraserX = 0, eraserY = 0;
+    
+    // Undo/Redo stack
+    private final List<List<List<Point>>> undoStack = new ArrayList<>();
+    private final List<List<List<Point>>> redoStack = new ArrayList<>();
+    
+    // Debug
+    private boolean showDebugOverlay = false;
+    private String parserDebugInfo = "";
 
     public SpellDrawingScreen(InteractionHand hand, List<List<Point>> existingStrokes) {
         super(Component.literal("Draw Spell"));
         this.hand = hand;
         if (existingStrokes != null) {
             this.strokes.addAll(existingStrokes);
-            com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
-            currentSpellStatus = result.ir.statusMessage();
+            reparse();
         }
         // Ensure dictionary is loaded on the client
         SpellDictionary.ensureLoaded();
@@ -44,12 +51,55 @@ public class SpellDrawingScreen extends Screen {
         this.canvasY = (this.height - this.canvasSize) / 2.0;
     }
 
+    private boolean isInsideCanvas(double mouseX, double mouseY) {
+        return mouseX >= canvasX && mouseX <= canvasX + canvasSize && mouseY >= canvasY && mouseY <= canvasY + canvasSize;
+    }
+
     private Point toNormalized(double mouseX, double mouseY) {
-        return new Point((mouseX - canvasX) / canvasSize, (mouseY - canvasY) / canvasSize);
+        double nx = (mouseX - canvasX) / canvasSize;
+        double ny = (mouseY - canvasY) / canvasSize;
+        return new Point(Math.max(0.0, Math.min(1.0, nx)), Math.max(0.0, Math.min(1.0, ny)));
     }
     
     private Point toScreen(Point p) {
         return new Point(p.x * canvasSize + canvasX, p.y * canvasSize + canvasY);
+    }
+    
+    private void saveState() {
+        List<List<Point>> copy = new ArrayList<>(strokes.size());
+        for (List<Point> stroke : strokes) {
+            copy.add(new ArrayList<>(stroke));
+        }
+        undoStack.add(copy);
+        redoStack.clear();
+    }
+
+    private void undo() {
+        if (!undoStack.isEmpty()) {
+            List<List<Point>> copy = new ArrayList<>(strokes.size());
+            for (List<Point> stroke : strokes) {
+                copy.add(new ArrayList<>(stroke));
+            }
+            redoStack.add(copy);
+            
+            strokes.clear();
+            strokes.addAll(undoStack.remove(undoStack.size() - 1));
+            reparse();
+        }
+    }
+
+    private void redo() {
+        if (!redoStack.isEmpty()) {
+            List<List<Point>> copy = new ArrayList<>(strokes.size());
+            for (List<Point> stroke : strokes) {
+                copy.add(new ArrayList<>(stroke));
+            }
+            undoStack.add(copy);
+            
+            strokes.clear();
+            strokes.addAll(redoStack.remove(redoStack.size() - 1));
+            reparse();
+        }
     }
 
     @Override
@@ -62,12 +112,12 @@ public class SpellDrawingScreen extends Screen {
 
         if (event.button() == 0) {
             if (eraserMode) {
-                // Start erasing
+                saveState();
                 erasing = true;
                 eraseAtPosition(event.x(), event.y());
                 return true;
-            } else {
-                // Start drawing
+            } else if (isInsideCanvas(event.x(), event.y())) {
+                saveState();
                 currentStroke = new ArrayList<>();
                 currentStroke.add(toNormalized(event.x(), event.y()));
                 return true;
@@ -75,9 +125,10 @@ public class SpellDrawingScreen extends Screen {
         }
         // Right-click to clear all
         if (event.button() == 1) {
+            saveState();
             strokes.clear();
             currentStroke = null;
-            currentSpellStatus = "Cleared";
+            reparse();
             return true;
         }
         return super.mouseClicked(event, doubleClick);
@@ -90,7 +141,9 @@ public class SpellDrawingScreen extends Screen {
                 eraseAtPosition(event.x(), event.y());
                 return true;
             } else if (currentStroke != null) {
-                currentStroke.add(toNormalized(event.x(), event.y()));
+                if (isInsideCanvas(event.x(), event.y())) {
+                    currentStroke.add(toNormalized(event.x(), event.y()));
+                }
                 return true;
             }
         }
@@ -104,11 +157,16 @@ public class SpellDrawingScreen extends Screen {
                 erasing = false;
                 reparse();
                 return true;
-            } else if (currentStroke != null && !currentStroke.isEmpty()) {
-                currentStroke.add(toNormalized(event.x(), event.y()));
-                strokes.add(new ArrayList<>(currentStroke));
-                currentStroke.clear();
+            } else if (currentStroke != null) {
+                if (isInsideCanvas(event.x(), event.y())) {
+                    currentStroke.add(toNormalized(event.x(), event.y()));
+                }
+                if (currentStroke.size() >= 2) {
+                    strokes.add(new ArrayList<>(currentStroke));
+                }
+                currentStroke = null;
                 reparse();
+                return true;
             }
         }
         return super.mouseReleased(event);
@@ -116,9 +174,20 @@ public class SpellDrawingScreen extends Screen {
 
     @Override
     public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
-        // Press 'E' to toggle eraser mode
-        if (event.key() == 69) { // GLFW_KEY_E
+        if (event.key() == GLFW.GLFW_KEY_E) {
             eraserMode = !eraserMode;
+            return true;
+        }
+        if (event.key() == GLFW.GLFW_KEY_F3) {
+            showDebugOverlay = !showDebugOverlay;
+            return true;
+        }
+        if (event.key() == GLFW.GLFW_KEY_Z) {
+            undo();
+            return true;
+        }
+        if (event.key() == GLFW.GLFW_KEY_Y) {
+            redo();
             return true;
         }
         return super.keyPressed(event);
@@ -131,11 +200,6 @@ public class SpellDrawingScreen extends Screen {
         super.mouseMoved(mouseX, mouseY);
     }
 
-    /**
-     * Erase all stroke points within ERASER_RADIUS_NORM of the given position.
-     * Strokes that get split in the middle are broken into two sub-strokes.
-     * Strokes that become too short (< 2 points) are removed entirely.
-     */
     private void eraseAtPosition(double mx, double my) {
         eraserX = mx;
         eraserY = my;
@@ -144,13 +208,11 @@ public class SpellDrawingScreen extends Screen {
         List<List<Point>> newStrokes = new ArrayList<>();
 
         for (List<Point> stroke : strokes) {
-            // Walk through the stroke, collecting segments that are outside the eraser
             List<Point> segment = new ArrayList<>();
             for (Point p : stroke) {
                 double dx = p.x - normMouse.x;
                 double dy = p.y - normMouse.y;
                 if (dx * dx + dy * dy <= rSq) {
-                    // This point is inside the eraser radius — break the segment
                     if (segment.size() >= 2) {
                         newStrokes.add(new ArrayList<>(segment));
                     }
@@ -159,7 +221,6 @@ public class SpellDrawingScreen extends Screen {
                     segment.add(p);
                 }
             }
-            // Don't forget the trailing segment
             if (segment.size() >= 2) {
                 newStrokes.add(segment);
             }
@@ -170,13 +231,22 @@ public class SpellDrawingScreen extends Screen {
     }
 
     private void reparse() {
+        if (strokes.isEmpty()) {
+            currentSpellStatus = "Cleared";
+            parserDebugInfo = "";
+            return;
+        }
         com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
         currentSpellStatus = result.ir.statusMessage();
+        if (result.isValidSpell()) {
+            parserDebugInfo = "Valid: " + result.ir.compiledSpellString();
+        } else {
+            parserDebugInfo = "Invalid or Incomplete";
+        }
     }
 
     @Override
     public void onClose() {
-        System.out.println("Sending SaveSpellPayload with strokes");
         net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(
                 new com.maxello1.whamagic.network.SaveSpellPayload(hand, strokes));
         super.onClose();
@@ -184,6 +254,14 @@ public class SpellDrawingScreen extends Screen {
 
     @Override
     public void extractRenderState(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
+        // Draw Canvas Background
+        graphics.fill((int)canvasX, (int)canvasY, (int)(canvasX + canvasSize), (int)(canvasY + canvasSize), 0x55000000);
+        // Draw Canvas Border
+        graphics.fill((int)canvasX, (int)canvasY, (int)(canvasX + canvasSize), (int)canvasY + 1, 0x88FFFFFF);
+        graphics.fill((int)canvasX, (int)(canvasY + canvasSize) - 1, (int)(canvasX + canvasSize), (int)(canvasY + canvasSize), 0x88FFFFFF);
+        graphics.fill((int)canvasX, (int)canvasY, (int)canvasX + 1, (int)(canvasY + canvasSize), 0x88FFFFFF);
+        graphics.fill((int)(canvasX + canvasSize) - 1, (int)canvasY, (int)(canvasX + canvasSize), (int)(canvasY + canvasSize), 0x88FFFFFF);
+
         // Draw saved strokes
         for (List<Point> stroke : strokes) {
             drawStroke(graphics, stroke, 0xFFFFFFFF);
@@ -198,11 +276,13 @@ public class SpellDrawingScreen extends Screen {
         graphics.text(this.font, currentSpellStatus, 10, 10, 0xFF00FF00);
         String modeText = eraserMode ? "ERASER MODE (E to toggle)" : "Right-click to clear | ESC to save & close";
         graphics.text(this.font, modeText, 10, 22, eraserMode ? 0xFFFF8844 : 0xFFAAAAAA);
-        graphics.text(this.font, "Strokes: " + strokes.size() + " | Middle-click or E: toggle eraser", 10, 34, 0xFFAAAAAA);
-
-        // Draw Canvas Border
-        graphics.fill((int)canvasX, (int)canvasY, (int)(canvasX + canvasSize), (int)(canvasY + canvasSize), 0x33FFFFFF);
+        graphics.text(this.font, "Strokes: " + strokes.size() + " | Middle-click or E: toggle eraser | Z/Y: Undo/Redo", 10, 34, 0xFFAAAAAA);
         
+        if (showDebugOverlay) {
+            graphics.text(this.font, "Debug: " + parserDebugInfo, 10, 46, 0xFFFFFF00);
+            graphics.text(this.font, String.format("Mouse Norm: %.3f, %.3f", toNormalized(mouseX, mouseY).x, toNormalized(mouseX, mouseY).y), 10, 58, 0xFFFFFF00);
+        }
+
         // Draw eraser cursor
         if (eraserMode) {
             int r = (int) (ERASER_RADIUS_NORM * canvasSize);
