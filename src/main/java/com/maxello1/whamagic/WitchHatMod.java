@@ -36,10 +36,10 @@ public class WitchHatMod implements ModInitializer {
     public static final ResourceKey<Item> INK_WAND_KEY = ResourceKey.create(Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "ink_wand"));
     public static final Item INK_WAND = new com.maxello1.whamagic.item.InkWandItem(new Item.Properties().setId(INK_WAND_KEY).stacksTo(1));
 
-    public static final DataComponentType<String> SPELL_COMPONENT = Registry.register(
+    public static final DataComponentType<com.maxello1.whamagic.magic.StoredSpell> STORED_SPELL_COMPONENT = Registry.register(
         BuiltInRegistries.DATA_COMPONENT_TYPE,
-        Identifier.fromNamespaceAndPath(MOD_ID, "spell"),
-        new DataComponentType.Builder<String>().persistent(Codec.STRING).networkSynchronized(ByteBufCodecs.STRING_UTF8).build()
+        Identifier.fromNamespaceAndPath(MOD_ID, "stored_spell"),
+        new DataComponentType.Builder<com.maxello1.whamagic.magic.StoredSpell>().persistent(com.maxello1.whamagic.magic.StoredSpell.CODEC).networkSynchronized(com.maxello1.whamagic.magic.StoredSpell.STREAM_CODEC).build()
     );
 
     public static final DataComponentType<java.util.List<java.util.List<com.maxello1.whamagic.parser.Point>>> STROKES_COMPONENT = Registry.register(
@@ -98,18 +98,10 @@ public class WitchHatMod implements ModInitializer {
                 
                 // Parse the strokes server-side for authority
                 com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(payload.strokes());
-                String compiledSpellString = "";
-                if (result.isValidSpell()) {
-                    if (result.ir.displayName() != null) {
-                        compiledSpellString = result.ir.displayName();
-                    }
-                    LOGGER.info("Compiled spell: {}", compiledSpellString);
-                } else {
-                    LOGGER.info("Invalid or incomplete spell drawn.");
-                }
-                
                 net.minecraft.world.item.ItemStack newStack = stack.copy();
-                newStack.set(SPELL_COMPONENT, compiledSpellString);
+                if (result.isValidSpell()) {
+                    newStack.set(STORED_SPELL_COMPONENT, com.maxello1.whamagic.magic.StoredSpell.fromIr(result.ir, payload.strokes()));
+                }
                 newStack.set(STROKES_COMPONENT, payload.strokes());
                 context.player().setItemInHand(usedHand, newStack);
                 context.player().getInventory().setChanged();

@@ -58,10 +58,10 @@ public class SpellPaperItem extends Item {
 
     @Override
     public Component getName(ItemStack stack) {
-        String spell = stack.get(WitchHatMod.SPELL_COMPONENT);
-        if (spell != null && !spell.isEmpty()) {
-            // Capitalize first letter of spell
-            String capitalized = spell.substring(0, 1).toUpperCase() + spell.substring(1);
+        com.maxello1.whamagic.magic.StoredSpell spell = stack.get(WitchHatMod.STORED_SPELL_COMPONENT);
+        if (spell != null && spell.displayName() != null && !spell.displayName().isEmpty()) {
+            String name = spell.displayName();
+            String capitalized = name.substring(0, 1).toUpperCase() + name.substring(1);
             return Component.literal(capitalized + " Spell");
         }
         return super.getName(stack);
@@ -69,9 +69,10 @@ public class SpellPaperItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, Item.TooltipContext context, net.minecraft.world.item.component.TooltipDisplay display, java.util.function.Consumer<Component> tooltipComponents, TooltipFlag tooltipFlag) {
-        String spell = stack.get(WitchHatMod.SPELL_COMPONENT);
-        if (spell != null && !spell.isEmpty()) {
-            tooltipComponents.accept(Component.literal("§dPrepared: " + spell));
+        com.maxello1.whamagic.magic.StoredSpell spell = stack.get(WitchHatMod.STORED_SPELL_COMPONENT);
+        if (spell != null && spell.displayName() != null && !spell.displayName().isEmpty()) {
+            String prefix = spell.state() == com.maxello1.whamagic.magic.SpellState.ACTIVE ? "§aActive: " : "§dPrepared: ";
+            tooltipComponents.accept(Component.literal(prefix + spell.displayName()));
         } else {
             tooltipComponents.accept(Component.literal("§7Empty Spell Paper"));
         }

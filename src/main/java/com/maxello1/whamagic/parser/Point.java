@@ -24,9 +24,9 @@ public class Point {
     public static final Codec<List<List<Point>>> STROKES_CODEC = CODEC.listOf().listOf();
 
     public static final StreamCodec<net.minecraft.network.FriendlyByteBuf, Point> STREAM_CODEC = StreamCodec.composite(
-            ByteBufCodecs.DOUBLE, p -> p.x,
-            ByteBufCodecs.DOUBLE, p -> p.y,
-            Point::new
+            ByteBufCodecs.SHORT, p -> (short) Math.round(p.x * 32000),
+            ByteBufCodecs.SHORT, p -> (short) Math.round(p.y * 32000),
+            (x, y) -> new Point(x / 32000.0, y / 32000.0)
     );
 
     @SuppressWarnings("unchecked")
