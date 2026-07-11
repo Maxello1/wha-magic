@@ -15,7 +15,7 @@ import java.util.List;
 
 /**
  * Loads sigil and sign templates from JSON resource files
- * and registers them with the CloudRecognizer.
+ * and registers them with the RasterRecognizer.
  *
  * JSON format matches the original wha-spell-simulator project:
  * - sigils.json: contains element sigils (fire, water, wind, etc.)
@@ -97,7 +97,9 @@ public class SpellDictionary {
                 com.maxello1.whamagic.magic.SigilSemantic sigilSem = null;
                 com.maxello1.whamagic.magic.SignSemantic signSem = null;
                 
+                com.maxello1.whamagic.magic.SymbolKind symbolKind = null;
                 if ("sigil".equals(kind)) {
+                    symbolKind = com.maxello1.whamagic.magic.SymbolKind.SIGIL;
                     sigilSem = new com.maxello1.whamagic.magic.SigilSemantic(
                         semanticObj.has("force") ? semanticObj.get("force").getAsDouble() : 0,
                         semanticObj.has("focus") ? semanticObj.get("focus").getAsDouble() : 0,
@@ -106,6 +108,7 @@ public class SpellDictionary {
                         semanticObj.has("lifetimeBias") ? semanticObj.get("lifetimeBias").getAsDouble() : 0
                     );
                 } else if ("sign".equals(kind)) {
+                    symbolKind = com.maxello1.whamagic.magic.SymbolKind.SIGN;
                     signSem = new com.maxello1.whamagic.magic.SignSemantic(
                         semanticObj.has("manifestation") ? semanticObj.get("manifestation").getAsString() : "none",
                         semanticObj.has("directionMode") ? semanticObj.get("directionMode").getAsString() : "none",
@@ -117,7 +120,7 @@ public class SpellDictionary {
                     );
                 }
 
-                RasterRecognizer.addTemplate(id, displayName, kind, element, strokes, sigilSem, signSem);
+                RasterRecognizer.addTemplate(id, displayName, symbolKind, element, strokes, sigilSem, signSem);
                 count++;
             }
         } catch (Exception e) {

@@ -39,7 +39,7 @@ public class RasterRecognizer {
     public static class RasterTemplate {
         public final String id;
         public final String displayName;
-        public final String kind; // "sigil" or "sign"
+        public final com.maxello1.whamagic.magic.SymbolKind kind;
         public final String element;
         public final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
         public final com.maxello1.whamagic.magic.SignSemantic signSemantic;
@@ -47,7 +47,7 @@ public class RasterRecognizer {
         public final InkLayers ink; // pre-rendered at load time
         public final TemplateFeatures features;
 
-        public RasterTemplate(String id, String displayName, String kind, String element, List<List<Point>> strokes,
+        public RasterTemplate(String id, String displayName, com.maxello1.whamagic.magic.SymbolKind kind, String element, List<List<Point>> strokes,
                               com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem) {
             this.id = id;
             this.displayName = displayName;
@@ -68,7 +68,7 @@ public class RasterRecognizer {
             this.rawStrokes = mergeFragmentedStrokes(filteredStrokes);
 
             TemplateNormalizer.NormalizedResult norm = TemplateNormalizer.normalize(this.rawStrokes, SAMPLES_PER_STROKE);
-            this.ink = renderInk(norm.strokes, 0);
+            this.ink = renderInk(norm.strokes);
             this.features = extractTemplateFeatures(this.rawStrokes, norm);
             
             LOGGER.info("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}",
@@ -163,13 +163,13 @@ public class RasterRecognizer {
         public final boolean recognized;
         public final String id;
         public final String displayName;
-        public final String kind;
+        public final com.maxello1.whamagic.magic.SymbolKind kind;
         public final String element;
         public final double score;
         public final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
         public final com.maxello1.whamagic.magic.SignSemantic signSemantic;
 
-        public RecognitionResult(boolean recognized, String id, String displayName, String kind, String element, double score,
+        public RecognitionResult(boolean recognized, String id, String displayName, com.maxello1.whamagic.magic.SymbolKind kind, String element, double score,
                                  com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem) {
             this.recognized = recognized;
             this.id = id;
@@ -184,7 +184,7 @@ public class RasterRecognizer {
 
     // ---- Public API ----
 
-    public static void addTemplate(String id, String displayName, String kind, String element, List<List<Point>> strokes,
+    public static void addTemplate(String id, String displayName, com.maxello1.whamagic.magic.SymbolKind kind, String element, List<List<Point>> strokes,
                                    com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem) {
         templates.add(new RasterTemplate(id, displayName, kind, element, strokes, sigilSem, signSem));
     }
@@ -201,18 +201,18 @@ public class RasterRecognizer {
      * Recognize drawn strokes against all registered templates of a specific kind.
      * Uses the raster ink overlay + structural feature scoring.
      */
-    public static RecognitionResult recognize(List<List<Point>> strokes, String expectedKind, double rotationDeg) {
+    public static RecognitionResult recognize(List<List<Point>> strokes, com.maxello1.whamagic.magic.SymbolKind expectedKind) {
         if (strokes == null || strokes.isEmpty()) {
-            return new RecognitionResult(false, null, "No strokes", "unknown", null, 0, null, null);
+            return new RecognitionResult(false, null, "No strokes", null, null, 0, null, null);
         }
 
         // Normalize candidate strokes
         TemplateNormalizer.NormalizedResult candidateNorm = TemplateNormalizer.normalize(strokes, SAMPLES_PER_STROKE);
         if (candidateNorm.strokes.isEmpty()) {
-            return new RecognitionResult(false, null, "No valid strokes", "unknown", null, 0, null, null);
+            return new RecognitionResult(false, null, "No valid strokes", null, null, 0, null, null);
         }
 
-        InkLayers candidateInk = renderInk(candidateNorm.strokes, rotationDeg);
+        InkLayers candidateInk = renderInk(candidateNorm.strokes);
 
         // Extract candidate structural features
         double[] candidateProfile = computeStrokeProfile(strokes);
@@ -225,7 +225,7 @@ public class RasterRecognizer {
         RasterTemplate bestTemplate = null;
 
         for (RasterTemplate template : templates) {
-            if (expectedKind != null && !template.kind.equals(expectedKind)) {
+            if (expectedKind != null && template.kind != expectedKind) {
                 continue;
             }
             
@@ -271,7 +271,7 @@ public class RasterRecognizer {
         }
 
         if (bestTemplate == null) {
-            return new RecognitionResult(false, null, "No templates", "unknown", null, 0, null, null);
+            return new RecognitionResult(false, null, "No templates", null, null, 0, null, null);
         }
 
         // Check ambiguity
@@ -292,33 +292,16 @@ public class RasterRecognizer {
     /**
      * Render strokes onto a INK_SIZE x INK_SIZE pixel grid with three thickness layers.
      */
-    private static InkLayers renderInk(List<List<Point>> strokes, double rotationDeg) {
+    private static InkLayers renderInk(List<List<Point>> strokes) {
         int size = INK_SIZE;
         byte[] coreMask = new byte[size * size];
         byte[] softMask = new byte[size * size];
         byte[] looseMask = new byte[size * size];
 
-        double cos = 1, sin = 0;
-        if (rotationDeg != 0) {
-            double rad = Math.toRadians(rotationDeg);
-            cos = Math.cos(rad);
-            sin = Math.sin(rad);
-        }
-
         for (List<Point> stroke : strokes) {
             if (stroke == null || stroke.isEmpty()) continue;
 
-            List<Point> rotated;
-            if (rotationDeg != 0) {
-                rotated = new ArrayList<>();
-                for (Point p : stroke) {
-                    double rx = (p.x - 0.5) * cos - (p.y - 0.5) * sin + 0.5;
-                    double ry = (p.x - 0.5) * sin + (p.y - 0.5) * cos + 0.5;
-                    rotated.add(new Point(rx, ry));
-                }
-            } else {
-                rotated = stroke;
-            }
+            List<Point> rotated = stroke;
 
             if (rotated.size() == 1) {
                 markInk(coreMask, softMask, looseMask, size, rotated.get(0).x, rotated.get(0).y);

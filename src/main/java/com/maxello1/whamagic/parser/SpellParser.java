@@ -34,7 +34,7 @@ public class SpellParser {
         
         RasterRecognizer.RecognitionResult primarySigil = null;
         if (!layers.coreStrokes.isEmpty()) {
-            primarySigil = RasterRecognizer.recognize(layers.coreStrokes, "sigil", 0);
+            primarySigil = RasterRecognizer.recognize(layers.coreStrokes, SymbolKind.SIGIL);
         }
         
         List<RecognizedSign> signs = new ArrayList<>();
@@ -50,7 +50,22 @@ public class SpellParser {
                     double angleToTest = (baseAngle + offset) % 360;
                     if (angleToTest < 0) angleToTest += 360;
                     
-                    RasterRecognizer.RecognitionResult res = RasterRecognizer.recognize(candidate.strokes(), "sign", angleToTest);
+                    List<List<Point>> rotatedStrokes = new ArrayList<>();
+                    double rad = Math.toRadians(angleToTest);
+                    double cos = Math.cos(rad);
+                    double sin = Math.sin(rad);
+                    
+                    for (List<Point> stroke : candidate.strokes()) {
+                        List<Point> rotated = new ArrayList<>();
+                        for (Point p : stroke) {
+                            double rx = (p.x - candidate.centroid().x) * cos - (p.y - candidate.centroid().y) * sin + candidate.centroid().x;
+                            double ry = (p.x - candidate.centroid().x) * sin + (p.y - candidate.centroid().y) * cos + candidate.centroid().y;
+                            rotated.add(new Point(rx, ry));
+                        }
+                        rotatedStrokes.add(rotated);
+                    }
+                    
+                    RasterRecognizer.RecognitionResult res = RasterRecognizer.recognize(rotatedStrokes, SymbolKind.SIGN);
                     if (bestRes == null || res.score > bestRes.score) {
                         bestRes = res;
                         bestAngle = angleToTest;

@@ -5,19 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class SymbolCandidateGrouper {
-    public record BoundingBox(double minX, double minY, double maxX, double maxY) {
-        public boolean overlaps(BoundingBox other) {
-            return this.minX <= other.maxX && this.maxX >= other.minX &&
-                   this.minY <= other.maxY && this.maxY >= other.minY;
-        }
-        public BoundingBox expand(double margin) {
-            return new BoundingBox(minX - margin, minY - margin, maxX + margin, maxY + margin);
-        }
-    }
-
     public record SymbolCandidate(
         List<List<Point>> strokes,
-        BoundingBox bounds,
         Point centroid,
         double angleAroundRing,
         double radiusNorm,
@@ -31,31 +20,8 @@ public class SymbolCandidateGrouper {
         int n = strokes.size();
         boolean[][] connected = new boolean[n][n];
         
-        BoundingBox[] bounds = new BoundingBox[n];
-        double[] angles = new double[n];
-        
-        for (int i = 0; i < n; i++) {
-            List<Point> stroke = strokes.get(i);
-            double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
-            double cx = 0, cy = 0;
-            for (Point p : stroke) {
-                if (p.x < minX) minX = p.x;
-                if (p.y < minY) minY = p.y;
-                if (p.x > maxX) maxX = p.x;
-                if (p.y > maxY) maxY = p.y;
-                cx += p.x;
-                cy += p.y;
-            }
-            bounds[i] = new BoundingBox(minX, minY, maxX, maxY);
-            if (ring != null) {
-                cx /= stroke.size();
-                cy /= stroke.size();
-                double angle = Math.toDegrees(Math.atan2(cy - ring.center().y, cx - ring.center().x));
-                angles[i] = angle < 0 ? angle + 360 : angle;
-            }
-        }
-        
-        double endpointDistSq = 0.025 * 0.025;
+        double endpointDistSq = 0.03 * 0.03; // Group if endpoints are within 3% of canvas
+        double generalDistSq = 0.05 * 0.05;  // Group if any points are within 5% of canvas
         
         for (int i = 0; i < n; i++) {
             for (int j = i + 1; j < n; j++) {
@@ -68,17 +34,20 @@ public class SymbolCandidateGrouper {
                 boolean endpointsClose = distSq(s1s, s2s) < endpointDistSq || distSq(s1s, s2e) < endpointDistSq || 
                                          distSq(s1e, s2s) < endpointDistSq || distSq(s1e, s2e) < endpointDistSq;
                 
-                boolean boundsOverlap = bounds[i].expand(0.05).overlaps(bounds[j].expand(0.05));
-                boolean anglesClose = false;
-                if (ring != null) {
-                    double diff = Math.abs(angles[i] - angles[j]);
-                    if (diff > 180) diff = 360 - diff;
-                    anglesClose = diff < 45;
-                } else {
-                    anglesClose = true;
+                boolean geometricallyClose = false;
+                if (!endpointsClose) {
+                    // Check if the strokes are geometrically close to each other anywhere
+                    double minDistSq = Double.MAX_VALUE;
+                    for(Point p1 : s1) {
+                        for(Point p2 : s2) {
+                            double d2 = distSq(p1, p2);
+                            if (d2 < minDistSq) minDistSq = d2;
+                        }
+                    }
+                    geometricallyClose = minDistSq < generalDistSq;
                 }
                 
-                if (endpointsClose || (boundsOverlap && anglesClose)) {
+                if (endpointsClose || geometricallyClose) {
                     connected[i][j] = true;
                     connected[j][i] = true;
                 }
@@ -92,18 +61,12 @@ public class SymbolCandidateGrouper {
                 dfs(i, connected, visited, comp);
                 
                 List<List<Point>> compStrokes = new ArrayList<>();
-                double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
                 double cx = 0, cy = 0;
                 int totalPoints = 0;
                 
                 for (int idx : comp) {
                     List<Point> s = strokes.get(idx);
                     compStrokes.add(s);
-                    BoundingBox b = bounds[idx];
-                    if (b.minX < minX) minX = b.minX;
-                    if (b.minY < minY) minY = b.minY;
-                    if (b.maxX > maxX) maxX = b.maxX;
-                    if (b.maxY > maxY) maxY = b.maxY;
                     for (Point p : s) {
                         cx += p.x;
                         cy += p.y;
@@ -122,8 +85,7 @@ public class SymbolCandidateGrouper {
                     radiusNorm = r / ring.radius();
                 }
                 
-                candidates.add(new SymbolCandidate(compStrokes, new BoundingBox(minX, minY, maxX, maxY), 
-                    new Point(cx, cy), angleAroundRing, radiusNorm, "sign"));
+                candidates.add(new SymbolCandidate(compStrokes, new Point(cx, cy), angleAroundRing, radiusNorm, "sign"));
             }
         }
         
