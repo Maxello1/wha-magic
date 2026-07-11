@@ -1,6 +1,7 @@
 package com.maxello1.whamagic.parser;
 
-import com.maxello1.whamagic.WitchHatMod;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -19,6 +20,8 @@ import java.util.List;
  * because it measures visual space instead of mathematical point distance.
  */
 public class RasterRecognizer {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(RasterRecognizer.class);
 
     private static final int INK_SIZE = 40;
     private static final int CORE_RADIUS = 1;
@@ -68,7 +71,7 @@ public class RasterRecognizer {
             this.ink = renderInk(norm.strokes, 0);
             this.features = extractTemplateFeatures(this.rawStrokes, norm);
             
-            WitchHatMod.LOGGER.info("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}",
+            LOGGER.info("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}",
                     id, this.rawStrokes.size(), norm.sourceAspectRatio, this.ink.coreInk);
         }
 
@@ -246,7 +249,7 @@ public class RasterRecognizer {
                 confidence = Math.min(confidence, cap);
             }
 
-            WitchHatMod.LOGGER.info("  vs '{}': ink={} explained={} covered={} dice={} struct={} (aspect={} count={} profile={}) -> conf={}",
+            LOGGER.info("  vs '{}': ink={} explained={} covered={} dice={} struct={} (aspect={} count={} profile={}) -> conf={}",
                     template.id,
                     String.format("%.3f", inkScores.inkScore),
                     String.format("%.3f", inkScores.candidateExplainedRatio),

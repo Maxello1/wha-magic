@@ -4,7 +4,8 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.maxello1.whamagic.WitchHatMod;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -22,6 +23,7 @@ import java.util.List;
  */
 public class SpellDictionary {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(SpellDictionary.class);
     private static final Gson GSON = new Gson();
     private static boolean loaded = false;
 
@@ -38,7 +40,7 @@ public class SpellDictionary {
         int sigilCount = loadFromResource("/data/wha-magic/dictionary/sigils.json", "sigil");
         int signCount = loadFromResource("/data/wha-magic/dictionary/signs.json", "sign");
 
-        WitchHatMod.LOGGER.info("SpellDictionary loaded: {} sigils, {} signs ({} total templates)",
+        LOGGER.info("SpellDictionary loaded: {} sigils, {} signs ({} total templates)",
                 sigilCount, signCount, RasterRecognizer.getTemplateCount());
     }
 
@@ -54,7 +56,7 @@ public class SpellDictionary {
         int count = 0;
         try (InputStream is = SpellDictionary.class.getResourceAsStream(resourcePath)) {
             if (is == null) {
-                WitchHatMod.LOGGER.warn("Dictionary resource not found: {}", resourcePath);
+                LOGGER.warn("Dictionary resource not found: {}", resourcePath);
                 return 0;
             }
 
@@ -73,13 +75,13 @@ public class SpellDictionary {
 
                 // Parse stroke template
                 if (!entry.has("strokeTemplate")) {
-                    WitchHatMod.LOGGER.warn("Skipping {} '{}': no strokeTemplate", kind, id);
+                    LOGGER.warn("Skipping {} '{}': no strokeTemplate", kind, id);
                     continue;
                 }
 
                 JsonObject strokeTemplate = entry.getAsJsonObject("strokeTemplate");
                 if (!strokeTemplate.has("strokes")) {
-                    WitchHatMod.LOGGER.warn("Skipping {} '{}': no strokes in template", kind, id);
+                    LOGGER.warn("Skipping {} '{}': no strokes in template", kind, id);
                     continue;
                 }
 
@@ -87,7 +89,7 @@ public class SpellDictionary {
                 List<List<Point>> strokes = parseStrokes(strokesArray);
 
                 if (strokes.isEmpty()) {
-                    WitchHatMod.LOGGER.warn("Skipping {} '{}': empty strokes", kind, id);
+                    LOGGER.warn("Skipping {} '{}': empty strokes", kind, id);
                     continue;
                 }
 
@@ -119,7 +121,7 @@ public class SpellDictionary {
                 count++;
             }
         } catch (Exception e) {
-            WitchHatMod.LOGGER.error("Failed to load dictionary from {}", resourcePath, e);
+            LOGGER.error("Failed to load dictionary from {}", resourcePath, e);
         }
         return count;
     }

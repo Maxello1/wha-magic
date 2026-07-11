@@ -4,7 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.maxello1.whamagic.magic.Point;
+import com.maxello1.whamagic.parser.Point;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -22,6 +22,8 @@ public class SpellParserTest {
 
     @BeforeAll
     public static void setup() {
+        net.minecraft.SharedConstants.tryDetectVersion();
+        net.minecraft.server.Bootstrap.bootStrap();
         SpellDictionary.ensureLoaded();
     }
 
