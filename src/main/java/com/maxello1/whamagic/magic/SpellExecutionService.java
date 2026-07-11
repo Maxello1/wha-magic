@@ -18,17 +18,26 @@ public class SpellExecutionService {
     public static void execute(Level level, Player player, SpellIr spell) {
         if (!(level instanceof ServerLevel serverLevel)) return;
         
-        String compiledStr = spell.compiledSpellString() != null ? spell.compiledSpellString().toLowerCase() : "";
         String element = spell.element() != null ? spell.element().toLowerCase() : "";
         
         String manifestation = "";
-        if (compiledStr.contains("column")) manifestation = "column";
-        else if (compiledStr.contains("levitation")) manifestation = "levitation";
-        else if (compiledStr.contains("convergence")) manifestation = "convergence";
-        
         double power = 1.0;
-        if (compiledStr.contains(" x2")) power = 2.0;
-        else if (compiledStr.contains(" x3")) power = 3.0;
+        
+        if (spell.signSemantics() != null) {
+            for (SignSemantic sem : spell.signSemantics()) {
+                if (!"none".equals(sem.manifestation())) {
+                    manifestation = sem.manifestation();
+                }
+            }
+        }
+        
+        if (spell.signCounts() != null) {
+            for (Integer count : spell.signCounts().values()) {
+                if (count > 1) {
+                    power = count;
+                }
+            }
+        }
         
         if (element.equals("water")) {
             executeWaterColumn(serverLevel, player, power);

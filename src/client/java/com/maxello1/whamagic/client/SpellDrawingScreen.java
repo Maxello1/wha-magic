@@ -239,7 +239,7 @@ public class SpellDrawingScreen extends Screen {
         com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
         currentSpellStatus = result.ir.statusMessage();
         if (result.isValidSpell()) {
-            parserDebugInfo = "Valid: " + result.ir.compiledSpellString();
+            parserDebugInfo = "Valid: " + result.ir.displayName();
         } else {
             parserDebugInfo = "Invalid or Incomplete";
         }

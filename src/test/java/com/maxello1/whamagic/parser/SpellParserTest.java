@@ -77,7 +77,7 @@ public class SpellParserTest {
         }
         
         SpellParser.ParseResult result = SpellParser.parse(strokes);
-        String actualSpell = result.ir.compiledSpellString();
+        String actualSpell = result.ir.displayName();
         
         assertEquals(expectedSpell, actualSpell, "Failed on fixture: " + file.getName());
     }

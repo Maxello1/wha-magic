@@ -27,7 +27,7 @@ public class SpellPaperItem extends Item {
         
         if (strokes != null && !strokes.isEmpty()) {
             com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
-            if (result.ir.valid() && result.ir.active()) {
+            if (result.ir.valid() && result.ir.state() == com.maxello1.whamagic.magic.SpellState.ACTIVE) {
                 if (!level.isClientSide()) {
                     com.maxello1.whamagic.magic.SpellExecutionService.execute(level, player, result.ir);
                     if (!player.getAbilities().instabuild) {
