@@ -4,15 +4,19 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.maxello1.whamagic.parser.Point;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.api.Timeout;
 
 import java.io.File;
 import java.io.FileReader;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -22,8 +26,6 @@ public class SpellParserTest {
 
     @BeforeAll
     public static void setup() {
-        net.minecraft.SharedConstants.tryDetectVersion();
-        net.minecraft.server.Bootstrap.bootStrap();
         SpellDictionary.ensureLoaded();
     }
 
@@ -33,34 +35,23 @@ public class SpellParserTest {
         assertFalse(result.isValidSpell());
     }
 
-    @Test
-    public void testFixtures() throws Exception {
-        URL url = getClass().getResource("/fixtures");
-        if (url == null) {
-            System.out.println("No fixtures directory found, skipping fixture tests.");
-            return;
-        }
-        File dir = new File(url.toURI());
+    private static Stream<File> fixtureFiles() {
+        File dir = new File("src/test/resources/fixtures");
         if (!dir.exists() || !dir.isDirectory()) {
-            System.out.println("Fixtures path is not a directory, skipping.");
-            return;
+            return Stream.empty();
         }
         
         File[] files = dir.listFiles((d, name) -> name.endsWith(".json"));
-        if (files == null || files.length == 0) {
-            System.out.println("No json fixtures found.");
-            return;
+        if (files == null) {
+            return Stream.empty();
         }
-        
-        int passed = 0;
-        for (File file : files) {
-            runFixture(file);
-            passed++;
-        }
-        System.out.println("Passed " + passed + " fixture tests.");
+        return Stream.of(files);
     }
 
-    private void runFixture(File file) throws Exception {
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("fixtureFiles")
+    @Timeout(value = 500, unit = TimeUnit.MILLISECONDS)
+    public void testFixture(File file) throws Exception {
         JsonObject json = GSON.fromJson(new FileReader(file), JsonObject.class);
         JsonArray strokesArray = json.getAsJsonArray("strokes");
         String expectedSpell = json.get("expectedSpell").getAsString();
@@ -77,7 +68,7 @@ public class SpellParserTest {
         }
         
         SpellParser.ParseResult result = SpellParser.parse(strokes);
-        String actualSpell = result.ir.displayName();
+        String actualSpell = result.ir.displayName() != null ? result.ir.displayName() : "";
         
         assertEquals(expectedSpell, actualSpell, "Failed on fixture: " + file.getName());
     }
