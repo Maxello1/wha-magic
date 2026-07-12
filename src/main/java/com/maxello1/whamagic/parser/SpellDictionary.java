@@ -133,7 +133,21 @@ public class SpellDictionary {
                     );
                 }
 
-                RasterRecognizer.addTemplate(id, displayName, symbolKind, element, strokes, sigilSem, signSem);
+                // Parse optional per-symbol recognition rules
+                com.maxello1.whamagic.magic.SymbolRecognitionRules rules = null;
+                if (entry.has("recognitionRules")) {
+                    JsonObject rulesObj = entry.getAsJsonObject("recognitionRules");
+                    com.maxello1.whamagic.magic.SymbolRecognitionRules defaults =
+                            "sigil".equals(kind) ? com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGIL_DEFAULTS
+                                                 : com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGN_DEFAULTS;
+                    rules = new com.maxello1.whamagic.magic.SymbolRecognitionRules(
+                        rulesObj.has("minimumComplexity") ? rulesObj.get("minimumComplexity").getAsDouble() : defaults.minimumComplexity(),
+                        rulesObj.has("allowLineLike") ? rulesObj.get("allowLineLike").getAsBoolean() : defaults.allowLineLike(),
+                        rulesObj.has("minimumDimensionRatio") ? rulesObj.get("minimumDimensionRatio").getAsDouble() : defaults.minimumDimensionRatio()
+                    );
+                }
+
+                RasterRecognizer.addTemplate(id, displayName, symbolKind, element, strokes, sigilSem, signSem, rules);
                 count++;
             }
         } catch (Exception e) {
