@@ -1,0 +1,159 @@
+=== Recognition Metrics Report ===
+
+neg_diagonal_line.json              expected=(none)               recognized=(none)                        
+neg_horizontal_line.json            expected=(none)               recognized=(none)                        
+neg_long_plain_line.json            expected=(none)               recognized=(none)                        
+neg_ring_without_sigil.json         expected=(none)               recognized=(none)                        
+neg_scribble.json                   expected=(none)               recognized=(none)                        
+neg_short_vertical_line.json        expected=(none)               recognized=(none)                        
+neg_tiny_circle.json                expected=(none)               recognized=(none)                        
+neg_tiny_hook.json                  expected=(none)               recognized=(none)                        
+neg_water_false_positive.json       expected=(none)               recognized=(none)                        
+random_scribble.json                expected=(none)               recognized=(none)                        
+sigil_earth.json                    expected=earth                recognized=(none)                        
+sigil_fire.json                     expected=fire                 recognized=fire                          
+sigil_light.json                    expected=light                recognized=(none)                        
+sigil_water.json                    expected=water                recognized=(none)                        
+sigil_wind.json                     expected=wind-directs-air     recognized=(none)                        
+sign_column.json                    expected=column               recognized=column                        
+sign_convergence.json               expected=convergence          recognized=convergence                   
+sign_levitation.json                expected=levitation           recognized=(none)                        
+single_horizontal_line.json         expected=(none)               recognized=(none)                        
+single_vertical_line.json           expected=(none)               recognized=(none)                        
+
+=== Summary ===
+Total fixtures:      20 (positive: 8, negative: 12)
+Top-1 accuracy:      3/8 (37.5%)
+Top-3 accuracy:      5/8 (62.5%)
+False positives:     0/12
+False rejections:    5/8
+Avg confidence gap:  0.100
+Max candidates:      12
+Max recognition calls: 84
+
+=== False Rejections ===
+  sigil_earth.json: expected=earth
+  sigil_light.json: expected=light
+  sigil_water.json: expected=water
+  sigil_wind.json: expected=wind-directs-air
+  sign_levitation.json: expected=levitation
+
+=== Per-Symbol Results ===
+  earth:               0/1 (0.0%)  [rejected: AMBIGUOUS_TOP_MATCHES]
+  fire:                1/1 (100.0%)
+  light:               0/1 (0.0%)  [rejected: AMBIGUOUS_TOP_MATCHES]
+  water:               0/1 (0.0%)
+  wind-directs-air:    0/1 (0.0%)
+  column:              1/1 (100.0%)
+  convergence:         1/1 (100.0%)
+  levitation:          0/1 (0.0%)
+
+=== Rejection Reason Counts ===
+  NONE:                          4
+  NO_STROKES:                    0
+  NO_TEMPLATES:                  0
+  SCORE_BELOW_THRESHOLD:         0
+  AMBIGUOUS_TOP_MATCHES:         2
+  LOW_TEMPLATE_COVERAGE:         0
+  EXCESS_UNEXPLAINED_INK:        0
+  INSUFFICIENT_GEOMETRY:         0
+  NOISE_DISCARDED:               0
+  INVALID_SYMBOL_KIND:           0
+  CANDIDATE_LIMIT_REACHED:       0
+
+  [DETAIL] sigil_earth.json:
+    Expected:          earth
+    Best match:        wind-directs-air (via SIGIL, conf=0.808)
+    Second best:       light (conf=0.784)
+    Gap:               0.024
+    Recognised:        false
+    Rejection reason:  AMBIGUOUS_TOP_MATCHES
+    Template coverage: 0.725
+    Explained ratio:   0.898
+    Unexplained ink:   0.102
+    Structural score:  0.654
+    Source strokes:    [0, 1, 3, 2]
+    Candidate ID:      6
+    Candidates evaluated: 7
+
+  [DETAIL] sigil_fire.json:
+    Expected:          fire
+    Best match:        fire (via SIGIL, conf=0.976)
+    Second best:       fire (conf=0.946)
+    Gap:               0.030
+    Recognised:        true
+    Rejection reason:  NONE
+    Template coverage: 1.000
+    Explained ratio:   1.000
+    Unexplained ink:   0.000
+    Structural score:  0.896
+    Source strokes:    [0, 1, 2, 3]
+    Candidate ID:      11
+    Candidates evaluated: 12
+
+  [DETAIL] sigil_light.json:
+    Expected:          light
+    Best match:        column (via SIGN, conf=0.645)
+    Second best:       levitation (conf=0.645)
+    Gap:               0.000
+    Recognised:        false
+    Rejection reason:  AMBIGUOUS_TOP_MATCHES
+    Template coverage: 0.516
+    Explained ratio:   0.775
+    Unexplained ink:   0.225
+    Structural score:  0.287
+    Source strokes:    [2]
+    Candidate ID:      1
+    Candidates evaluated: 3
+
+  [DETAIL] sigil_water.json:
+    (no evaluated candidates)
+
+  [DETAIL] sigil_wind.json:
+    Expected:          wind-directs-air
+    Best match:        levitation (via SIGN, conf=0.769)
+    Second best:       wind-directs-air (conf=0.767)
+    Gap:               0.002
+    Recognised:        false
+    Rejection reason:  NONE
+    Template coverage: 0.783
+    Explained ratio:   0.715
+    Unexplained ink:   0.285
+    Structural score:  0.672
+    Source strokes:    [0, 1, 2]
+    Candidate ID:      2
+    Candidates evaluated: 3
+
+  [DETAIL] sign_column.json:
+    Expected:          column
+    Best match:        column (via SIGN, conf=1.000)
+    Second best:       levitation (conf=0.861)
+    Gap:               0.139
+    Recognised:        true
+    Rejection reason:  NONE
+    Template coverage: 1.000
+    Explained ratio:   1.000
+    Unexplained ink:   0.000
+    Structural score:  1.000
+    Source strokes:    [0, 1]
+    Candidate ID:      2
+    Candidates evaluated: 3
+
+  [DETAIL] sign_convergence.json:
+    Expected:          convergence
+    Best match:        convergence (via SIGN, conf=0.985)
+    Second best:       fire (conf=0.686)
+    Gap:               0.300
+    Recognised:        true
+    Rejection reason:  NONE
+    Template coverage: 1.000
+    Explained ratio:   1.000
+    Unexplained ink:   0.000
+    Structural score:  0.920
+    Source strokes:    [0]
+    Candidate ID:      0
+    Candidates evaluated: 1
+
+  [DETAIL] sign_levitation.json:
+    (no evaluated candidates)
+

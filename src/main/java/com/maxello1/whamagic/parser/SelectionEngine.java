@@ -33,7 +33,7 @@ public class SelectionEngine {
         // Noise rejection thresholds
         double MIN_PATH_LENGTH = 0.10; // minimum path length as fraction of canvas
         int MIN_POINT_COUNT = 4;       // minimum total points
-        double MIN_DIMENSION = 0.04;   // minimum width or height
+        double MIN_DIMENSION = 0.07;   // minimum width or height
         
         List<EvaluatedCandidate> evaluated = new ArrayList<>();
         
@@ -109,16 +109,33 @@ public class SelectionEngine {
             
             if (!overlap) {
                 boolean isSigil = eval.sigilRoleScore >= eval.signRoleScore;
-                RasterRecognizer.RecognitionResult res = isSigil ? eval.sigilRes : eval.signRes;
+                RasterRecognizer.RecognitionResult primaryRes = isSigil ? eval.sigilRes : eval.signRes;
+                RasterRecognizer.RecognitionResult fallbackRes = isSigil ? eval.signRes : eval.sigilRes;
                 
-                if (res != null && res.recognized) {
+                // Try primary interpretation first, then fallback
+                RasterRecognizer.RecognitionResult res = null;
+                boolean selectedAsSigil = isSigil;
+                if (primaryRes != null && primaryRes.recognized) {
+                    res = primaryRes;
+                } else if (fallbackRes != null && fallbackRes.recognized
+                        && fallbackRes.confidenceGap >= 0.05
+                        && fallbackRes.score >= 0.70) {
+                    // Only use fallback if it has a clear confidence gap
+                    // AND a solid confidence score. Without these checks,
+                    // random shapes can match via the weaker interpretation.
+                    res = fallbackRes;
+                    selectedAsSigil = !isSigil;
+                }
+                
+                if (res != null) {
                     selectedCandidates.add(eval.cand);
                     usedStrokes.addAll(eval.cand.sourceStrokeIndices());
                     
                     // Build alternatives with role scores populated
-                    List<RecognitionAlternative> alts = buildAlternatives(res, isSigil ? eval.sigilRoleScore : eval.signRoleScore, eval.bestAngle);
+                    double roleScore = selectedAsSigil ? eval.sigilRoleScore : eval.signRoleScore;
+                    List<RecognitionAlternative> alts = buildAlternatives(res, roleScore, eval.bestAngle);
                     
-                    if (isSigil) {
+                    if (selectedAsSigil) {
                         ElementType el = null;
                         try { if (res.element != null) el = ElementType.valueOf(res.element.toUpperCase()); } catch (Exception ignored) {}
                         
