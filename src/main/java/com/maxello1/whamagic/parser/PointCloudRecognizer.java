@@ -1,10 +1,12 @@
 /*
- * $P Point-Cloud Recognizer for WHA Magic
+ * $P Point-Cloud Recognizer with $P+ Turning Angles
  *
- * Based on the $P recognizer by Vatavu, Anthony, and Wobbrock (ICMI 2012).
- * https://depts.washington.edu/madlab/proj/dollar/pdollar.html
+ * Based on:
+ * - $P: Vatavu, Anthony, Wobbrock. "Gestures as Point Clouds." ICMI 2012.
+ * - $P+: Vatavu. "$P+ Recognizer." ICMI 2023.
+ * Licensed under the New BSD License. See THIRD_PARTY_NOTICES.md.
  *
- * Ported to Java for WHA Magic Minecraft mod.
+ * Ported to Java and extended for WHA Magic Minecraft mod.
  *
  * Original WHA Magic additions and modifications:
  * Copyright (c) 2026 Maxello1.
