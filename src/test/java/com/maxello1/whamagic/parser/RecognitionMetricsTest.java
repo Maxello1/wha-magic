@@ -365,6 +365,18 @@ public class RecognitionMetricsTest {
         out.append(String.format("    Source strokes:    %s\n", sourceStrokes));
         out.append(String.format("    Candidate ID:      %d\n", candidateId));
         out.append(String.format("    Candidates evaluated: %d\n", candidatesEvaluated));
+        
+        // Show expected symbol's best score across all candidates
+        double expectedBestScore = 0;
+        String expectedBestKind = "N/A";
+        for (AlternativeWithContext ctx : allAlts) {
+            if (ctx.alt.id() != null && ctx.alt.id().getPath().equals(expectedId)) {
+                expectedBestScore = ctx.alt.rawScore();
+                expectedBestKind = ctx.kind;
+                break; // already sorted descending
+            }
+        }
+        out.append(String.format("    Expected '%s' best: %.3f (via %s)\n", expectedId, expectedBestScore, expectedBestKind));
         out.append("\n");
     }
 

@@ -87,10 +87,15 @@ public class SelectionEngine {
             evaluated.add(new EvaluatedCandidate(cand, sigilRes, sigilRoleScore, bestSignRes, signRoleScore, bestAngle));
         }
         
-        evaluated.sort((a, b) -> Double.compare(
-            Math.max(b.sigilRoleScore, b.signRoleScore), 
-            Math.max(a.sigilRoleScore, a.signRoleScore)
-        ));
+        evaluated.sort((a, b) -> {
+            // Primary: best role score. Tiebreaker: prefer candidates using more strokes
+            // (they explain more of the drawing and reduce spurious subset matches).
+            double scoreA = Math.max(a.sigilRoleScore, a.signRoleScore)
+                    + a.cand.sourceStrokeIndices().size() * 0.02;
+            double scoreB = Math.max(b.sigilRoleScore, b.signRoleScore)
+                    + b.cand.sourceStrokeIndices().size() * 0.02;
+            return Double.compare(scoreB, scoreA);
+        });
         
         Set<Integer> usedStrokes = new HashSet<>();
         List<RecognizedSigil> outSigils = new ArrayList<>();
