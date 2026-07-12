@@ -180,11 +180,16 @@ public class RasterRecognizer {
         public final double aspectRatio;
         public final int strokeCount;
         public final double[] strokeProfile;
+        public final double[] directionHistogram;
+        public final double[] regionalDistribution;
 
-        public TemplateFeatures(double aspectRatio, int strokeCount, double[] strokeProfile) {
+        public TemplateFeatures(double aspectRatio, int strokeCount, double[] strokeProfile,
+                                double[] directionHistogram, double[] regionalDistribution) {
             this.aspectRatio = aspectRatio;
             this.strokeCount = strokeCount;
             this.strokeProfile = strokeProfile;
+            this.directionHistogram = directionHistogram;
+            this.regionalDistribution = regionalDistribution;
         }
     }
 
@@ -286,6 +291,8 @@ public class RasterRecognizer {
         double[] candidateProfile = computeStrokeProfile(strokes);
         double candidateAspectRatio = candidateNorm.sourceAspectRatio;
         int candidateStrokeCount = strokes.size();
+        double[] candidateDirectionHist = computeDirectionHistogram(candidateNorm.strokes);
+        double[] candidateRegionalDist = computeRegionalDistribution(candidateInk.coreMask);
 
         // Collect all scored alternatives
         List<ScoredAlternative> scored = new ArrayList<>();
@@ -303,9 +310,14 @@ public class RasterRecognizer {
             double countScore = strokeCountCompatibility(candidateStrokeCount, template.features.strokeCount);
             double profileScore = profileCompatibility(candidateProfile, template.features.strokeProfile);
 
-            double structuralScore = clamp(aspectScore * 0.54 + profileScore * 0.28 + countScore * 0.18);
+            // Phase 4 supplementary features (used for disambiguation, not primary score)
+            double directionScore = directionHistogramCompatibility(candidateDirectionHist, template.features.directionHistogram);
+            double regionalScore = regionalDistributionCompatibility(candidateRegionalDist, template.features.regionalDistribution);
 
-            // 3) Combined contextual score (matching symbolRecognizer.js weights)
+            // Structural score with reduced stroke count weight (Phase 4)
+            double structuralScore = clamp(aspectScore * 0.50 + profileScore * 0.20 + countScore * 0.10 + directionScore * 0.10 + regionalScore * 0.10);
+
+            // Combined contextual score — base formula preserved from Phase 2
             double contextual = inkScores.inkScore * 0.68 + structuralScore * 0.13 + 0.1 + 0.04 + 0.05;
             double confidence = clamp(Math.min(contextual, inkScores.inkScore + 0.035));
 
@@ -606,7 +618,11 @@ public class RasterRecognizer {
         double aspect = norm.sourceAspectRatio;
         int strokeCount = rawStrokes.size();
         double[] profile = computeStrokeProfile(rawStrokes);
-        return new TemplateFeatures(aspect, strokeCount, profile);
+        double[] directionHist = computeDirectionHistogram(norm.strokes);
+        // Regional distribution computed from template ink at load time
+        InkLayers tempInk = renderInk(norm.strokes);
+        double[] regionalDist = computeRegionalDistribution(tempInk.coreMask);
+        return new TemplateFeatures(aspect, strokeCount, profile, directionHist, regionalDist);
     }
 
     private static double[] computeStrokeProfile(List<List<Point>> strokes) {
@@ -656,7 +672,92 @@ public class RasterRecognizer {
         return clamp(1 - distance / 1.4);
     }
 
-    // ---- Utility ----
+    /**
+     * Compute a direction histogram with 8 bins (N, NE, E, SE, S, SW, W, NW).
+     * Measures the distribution of stroke segment directions, independent of stroke count.
+     */
+    private static double[] computeDirectionHistogram(List<List<Point>> strokes) {
+        double[] hist = new double[8];
+        double totalLength = 0;
+
+        for (List<Point> stroke : strokes) {
+            for (int i = 1; i < stroke.size(); i++) {
+                double dx = stroke.get(i).x - stroke.get(i - 1).x;
+                double dy = stroke.get(i).y - stroke.get(i - 1).y;
+                double len = Math.hypot(dx, dy);
+                if (len < 0.0001) continue;
+
+                double angle = Math.atan2(dy, dx);
+                if (angle < 0) angle += 2 * Math.PI;
+
+                int bin = (int) Math.round(angle / (Math.PI / 4)) % 8;
+                hist[bin] += len;
+                totalLength += len;
+            }
+        }
+
+        // Normalize
+        if (totalLength > 0) {
+            for (int i = 0; i < hist.length; i++) {
+                hist[i] /= totalLength;
+            }
+        }
+        return hist;
+    }
+
+    /** Compare direction histograms using normalized histogram intersection. */
+    private static double directionHistogramCompatibility(double[] candidateHist, double[] templateHist) {
+        if (candidateHist == null || templateHist == null) return 0.5;
+        double intersection = 0;
+        for (int i = 0; i < Math.min(candidateHist.length, templateHist.length); i++) {
+            intersection += Math.min(candidateHist[i], templateHist[i]);
+        }
+        return clamp(intersection);
+    }
+
+    /**
+     * Compute regional ink distribution from a raster mask.
+     * Uses a 5x5 grid (25 regions) for coarser but more robust comparison.
+     */
+    private static double[] computeRegionalDistribution(byte[] coreMask) {
+        int regionSize = 5;
+        double[] dist = new double[regionSize * regionSize];
+        int totalInk = 0;
+
+        int size = INK_SIZE;
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                if (coreMask[y * size + x] != 0) {
+                    int rx = Math.min(regionSize - 1, x * regionSize / size);
+                    int ry = Math.min(regionSize - 1, y * regionSize / size);
+                    dist[ry * regionSize + rx]++;
+                    totalInk++;
+                }
+            }
+        }
+
+        // Normalize
+        if (totalInk > 0) {
+            for (int i = 0; i < dist.length; i++) {
+                dist[i] /= totalInk;
+            }
+        }
+        return dist;
+    }
+
+    /** Compare regional distributions using cosine similarity. */
+    private static double regionalDistributionCompatibility(double[] candidateDist, double[] templateDist) {
+        if (candidateDist == null || templateDist == null) return 0.5;
+        int n = Math.min(candidateDist.length, templateDist.length);
+        double dot = 0, magA = 0, magB = 0;
+        for (int i = 0; i < n; i++) {
+            dot += candidateDist[i] * templateDist[i];
+            magA += candidateDist[i] * candidateDist[i];
+            magB += templateDist[i] * templateDist[i];
+        }
+        double denom = Math.sqrt(magA) * Math.sqrt(magB);
+        return denom > 0 ? clamp(dot / denom) : 0;
+    }
 
     private static double pathLength(List<Point> points) {
         double d = 0;
