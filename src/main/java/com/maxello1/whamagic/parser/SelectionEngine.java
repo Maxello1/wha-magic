@@ -50,18 +50,34 @@ public class SelectionEngine {
                 continue;
             }
             
-            RasterRecognizer.RecognitionResult sigilRes = PointCloudRecognizer.INSTANCE.recognize(cand.strokes(), SymbolKind.SIGIL);
-            calls++;
+            // Optimization: skip irrelevant tests based on radial position.
+            // Candidates near center are likely sigils; candidates near edge are likely signs.
+            // Overlap zone (0.35-0.50) and standalone candidates (no ring, position 0) test as both.
+            boolean likelySigil = cand.radialPosition() < 0.50;
+            boolean likelySign = cand.radialPosition() > 0.35 || cand.radialPosition() < 0.05;
             
-            double sigilScore = sigilRes.score;
-            double centralityScore = 1.0 - clamp(cand.radialPosition() / 0.70);
-            double sigilRoleScore = sigilScore > 0 ? sigilScore + centralityScore * 0.20 : 0;
+            RasterRecognizer.RecognitionResult sigilRes = null;
+            double sigilScore = 0;
+            double sigilRoleScore = 0;
+            
+            if (likelySigil) {
+                sigilRes = PointCloudRecognizer.INSTANCE.recognize(cand.strokes(), SymbolKind.SIGIL);
+                calls++;
+                sigilScore = sigilRes.score;
+                double centralityScore = 1.0 - clamp(cand.radialPosition() / 0.70);
+                sigilRoleScore = sigilScore > 0 ? sigilScore + centralityScore * 0.20 : 0;
+            } else {
+                sigilRes = new RasterRecognizer.RecognitionResult(
+                        false, null, "Unknown", null, null, 0, null, null,
+                        RecognitionRejectionReason.SCORE_BELOW_THRESHOLD);
+            }
             
             double bestSignScore = 0;
             RasterRecognizer.RecognitionResult bestSignRes = null;
             double bestAngle = 0;
             
-            if (calls < maxCalls) {
+            // Optimization: skip sign rotation tests for clearly central candidates
+            if (likelySign && calls < maxCalls) {
                 double baseAngle = cand.angularPosition();
                 double[] offsets = {0, 90, 180, 270, 15, -15, 30, -30, 45, -45};
                 for (double offset : offsets) {
