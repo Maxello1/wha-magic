@@ -30,11 +30,25 @@ public class SelectionEngine {
     
     public static SelectedSymbols select(List<SymbolCandidate> candidates, RingDetector.RingGlyph ring, int maxCalls) {
         int calls = 0;
+        // Noise rejection thresholds
+        double MIN_PATH_LENGTH = 0.10; // minimum path length as fraction of canvas
+        int MIN_POINT_COUNT = 4;       // minimum total points
+        double MIN_DIMENSION = 0.04;   // minimum width or height
         
         List<EvaluatedCandidate> evaluated = new ArrayList<>();
         
         for (SymbolCandidate cand : candidates) {
             if (calls >= maxCalls) break;
+            
+            // Phase 2: Early noise rejection — skip recognition for obvious noise
+            if (isNoise(cand, MIN_PATH_LENGTH, MIN_POINT_COUNT, MIN_DIMENSION)) {
+                // Create a stub result for noise candidates
+                RasterRecognizer.RecognitionResult noiseRes = new RasterRecognizer.RecognitionResult(
+                        false, null, "Noise", null, null, 0, null, null,
+                        RecognitionRejectionReason.NOISE_DISCARDED);
+                evaluated.add(new EvaluatedCandidate(cand, noiseRes, 0, null, 0, 0));
+                continue;
+            }
             
             RasterRecognizer.RecognitionResult sigilRes = RasterRecognizer.recognize(cand.strokes(), SymbolKind.SIGIL);
             calls++;
@@ -247,5 +261,43 @@ public class SelectionEngine {
             this.signRoleScore = signRoleScore;
             this.bestAngle = bestAngle;
         }
+    }
+    
+    /** Check if a candidate is obviously noise that should skip full recognition. */
+    private static boolean isNoise(SymbolCandidate cand, double minPathLength, int minPointCount, double minDimension) {
+        // Count total points
+        int totalPoints = 0;
+        double pathLen = 0;
+        double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE;
+        double minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        
+        for (List<Point> stroke : cand.strokes()) {
+            totalPoints += stroke.size();
+            for (int i = 0; i < stroke.size(); i++) {
+                Point p = stroke.get(i);
+                minX = Math.min(minX, p.x);
+                maxX = Math.max(maxX, p.x);
+                minY = Math.min(minY, p.y);
+                maxY = Math.max(maxY, p.y);
+                if (i > 0) {
+                    Point prev = stroke.get(i - 1);
+                    pathLen += Math.hypot(p.x - prev.x, p.y - prev.y);
+                }
+            }
+        }
+        
+        double w = maxX - minX;
+        double h = maxY - minY;
+        
+        // Too few points
+        if (totalPoints < minPointCount) return true;
+        
+        // Negligible path length
+        if (pathLen < minPathLength) return true;
+        
+        // Near-zero dimensions (dot-like)
+        if (w < minDimension && h < minDimension) return true;
+        
+        return false;
     }
 }

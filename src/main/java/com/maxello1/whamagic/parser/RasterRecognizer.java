@@ -42,7 +42,15 @@ public class RasterRecognizer {
     private static final int SAMPLES_PER_STROKE = 40;
     private static final int REGION_GRID_SIZE = 10;
     private static final double MIN_CONFIDENCE = 0.48;
-    private static final double AMBIGUITY_GAP = 0.065;
+    private static final double AMBIGUITY_GAP = 0.035;
+    // Phase 2 acceptance gates
+    private static final double MIN_TEMPLATE_COVERAGE_SIGIL = 0.35;
+    private static final double MIN_TEMPLATE_COVERAGE_SIGN = 0.25;
+    private static final double MAX_UNEXPLAINED_INK_SIGIL = 0.55;
+    private static final double MAX_UNEXPLAINED_INK_SIGN = 0.65;
+    private static final double MIN_COMPLEXITY_COMPAT = 0.15;
+    private static final double MIN_DIMENSION_RATIO_SIGIL = 0.12;
+    private static final double MIN_DIMENSION_RATIO_SIGN = 0.05;
 
     private static final List<RasterTemplate> templates = new ArrayList<>();
 
@@ -58,15 +66,22 @@ public class RasterRecognizer {
         public final List<List<Point>> rawStrokes;
         public final InkLayers ink; // pre-rendered at load time
         public final TemplateFeatures features;
+        public final com.maxello1.whamagic.magic.TemplateComplexity complexity;
+        public final com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules;
 
         public RasterTemplate(String id, String displayName, com.maxello1.whamagic.magic.SymbolKind kind, String element, List<List<Point>> strokes,
-                              com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem) {
+                              com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem,
+                              com.maxello1.whamagic.magic.SymbolRecognitionRules rules) {
             this.id = id;
             this.displayName = displayName;
             this.kind = kind;
             this.element = element;
             this.sigilSemantic = sigilSem;
             this.signSemantic = signSem;
+            this.recognitionRules = rules != null ? rules :
+                    (kind == com.maxello1.whamagic.magic.SymbolKind.SIGIL
+                            ? com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGIL_DEFAULTS
+                            : com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGN_DEFAULTS);
             
             // Filter out 1-point decoration markers
             List<List<Point>> filteredStrokes = new ArrayList<>();
@@ -82,9 +97,11 @@ public class RasterRecognizer {
             TemplateNormalizer.NormalizedResult norm = TemplateNormalizer.normalize(this.rawStrokes, SAMPLES_PER_STROKE);
             this.ink = renderInk(norm.strokes);
             this.features = extractTemplateFeatures(this.rawStrokes, norm);
+            this.complexity = computeTemplateComplexity(norm, this.ink, this.rawStrokes);
             
-            LOGGER.debug("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}",
-                    id, this.rawStrokes.size(), norm.sourceAspectRatio, this.ink.coreInk);
+            LOGGER.debug("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}, complexity.pathLen={}",
+                    id, this.rawStrokes.size(), norm.sourceAspectRatio, this.ink.coreInk,
+                    String.format("%.3f", this.complexity.pathLength()));
         }
 
         private static List<List<Point>> mergeFragmentedStrokes(List<List<Point>> strokes) {
@@ -227,7 +244,13 @@ public class RasterRecognizer {
 
     public static void addTemplate(String id, String displayName, com.maxello1.whamagic.magic.SymbolKind kind, String element, List<List<Point>> strokes,
                                    com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem) {
-        templates.add(new RasterTemplate(id, displayName, kind, element, strokes, sigilSem, signSem));
+        addTemplate(id, displayName, kind, element, strokes, sigilSem, signSem, null);
+    }
+
+    public static void addTemplate(String id, String displayName, com.maxello1.whamagic.magic.SymbolKind kind, String element, List<List<Point>> strokes,
+                                   com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem,
+                                   com.maxello1.whamagic.magic.SymbolRecognitionRules rules) {
+        templates.add(new RasterTemplate(id, displayName, kind, element, strokes, sigilSem, signSem, rules));
     }
 
     public static void clearTemplates() {
@@ -340,17 +363,38 @@ public class RasterRecognizer {
             ));
         }
 
-        // Check ambiguity
+        // Phase 2: Multi-gate acceptance
         boolean ambiguous = gap < AMBIGUITY_GAP && secondScore >= 0;
+        boolean isSigil = expectedKind == com.maxello1.whamagic.magic.SymbolKind.SIGIL;
+        com.maxello1.whamagic.magic.SymbolRecognitionRules rules = best.template.recognitionRules;
 
-        // Determine rejection reason
-        com.maxello1.whamagic.magic.RecognitionRejectionReason reason;
-        if (best.confidence >= MIN_CONFIDENCE && !ambiguous) {
-            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE;
-        } else if (best.confidence < MIN_CONFIDENCE) {
+        // Gate 1: Minimum confidence
+        com.maxello1.whamagic.magic.RecognitionRejectionReason reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE;
+        if (best.confidence < MIN_CONFIDENCE) {
             reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.SCORE_BELOW_THRESHOLD;
-        } else {
+        }
+        // Gate 2: Ambiguity gap
+        else if (ambiguous) {
             reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.AMBIGUOUS_TOP_MATCHES;
+        }
+        // Gate 3: Template coverage — candidate must cover enough of the template
+        else if (best.templateCoverage < (isSigil ? MIN_TEMPLATE_COVERAGE_SIGIL : MIN_TEMPLATE_COVERAGE_SIGN)) {
+            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.LOW_TEMPLATE_COVERAGE;
+        }
+        // Gate 4: Unexplained ink — candidate must not have too much extra ink
+        else if (best.unexplainedInkRatio > (isSigil ? MAX_UNEXPLAINED_INK_SIGIL : MAX_UNEXPLAINED_INK_SIGN)) {
+            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.EXCESS_UNEXPLAINED_INK;
+        }
+        // Gate 5: Dimensionality — reject line-like candidates for templates that don't allow it
+        else if (!rules.allowLineLike()) {
+            double candDimensionality = computeCandidateDimensionality(strokes);
+            if (candDimensionality < rules.minimumDimensionRatio()) {
+                reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.INSUFFICIENT_GEOMETRY;
+            }
+        }
+        // Gate 6: Structural score — candidate topology must loosely match template
+        if (reason == com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE && best.structuralScore < 0.45) {
+            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.INSUFFICIENT_GEOMETRY;
         }
 
         boolean recognized = reason == com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE;
@@ -628,5 +672,60 @@ public class RasterRecognizer {
 
     private static double clamp(double v, double min, double max) {
         return Math.max(min, Math.min(max, v));
+    }
+
+    /** Compute template complexity profile at registration time. */
+    private static com.maxello1.whamagic.magic.TemplateComplexity computeTemplateComplexity(
+            TemplateNormalizer.NormalizedResult norm, InkLayers ink, List<List<Point>> rawStrokes) {
+        // Total path length of normalized strokes
+        double totalPath = 0;
+        for (List<Point> stroke : norm.strokes) {
+            totalPath += pathLength(stroke);
+        }
+
+        // Ink coverage: fraction of the 40x40 grid covered
+        double inkCoverage = (double) ink.softInk / (INK_SIZE * INK_SIZE);
+
+        // Dimensionality: min(w,h) / max(w,h) of the bounding box
+        double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE;
+        double minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        for (List<Point> stroke : rawStrokes) {
+            for (Point p : stroke) {
+                minX = Math.min(minX, p.x);
+                maxX = Math.max(maxX, p.x);
+                minY = Math.min(minY, p.y);
+                maxY = Math.max(maxY, p.y);
+            }
+        }
+        double w = maxX - minX;
+        double h = maxY - minY;
+        double dimensionality = (w > 0 && h > 0) ? Math.min(w, h) / Math.max(w, h) : 0;
+
+        // Endpoint estimate: 2 endpoints per stroke
+        int endpointEstimate = rawStrokes.size() * 2;
+
+        // Component estimate: number of distinct stroke groups
+        int componentEstimate = rawStrokes.size();
+
+        return new com.maxello1.whamagic.magic.TemplateComplexity(
+                totalPath, inkCoverage, dimensionality, endpointEstimate, componentEstimate);
+    }
+
+    /** Compute dimensionality (min/max dimension ratio) of candidate strokes. */
+    private static double computeCandidateDimensionality(List<List<Point>> strokes) {
+        double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE;
+        double minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        for (List<Point> stroke : strokes) {
+            for (Point p : stroke) {
+                minX = Math.min(minX, p.x);
+                maxX = Math.max(maxX, p.x);
+                minY = Math.min(minY, p.y);
+                maxY = Math.max(maxY, p.y);
+            }
+        }
+        double w = maxX - minX;
+        double h = maxY - minY;
+        if (w <= 0 || h <= 0) return 0;
+        return Math.min(w, h) / Math.max(w, h);
     }
 }
