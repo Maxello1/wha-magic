@@ -50,7 +50,7 @@ public class SelectionEngine {
                 continue;
             }
             
-            RasterRecognizer.RecognitionResult sigilRes = RasterRecognizer.recognize(cand.strokes(), SymbolKind.SIGIL);
+            RasterRecognizer.RecognitionResult sigilRes = PointCloudRecognizer.recognize(cand.strokes(), SymbolKind.SIGIL);
             calls++;
             
             double sigilScore = sigilRes.score;
@@ -70,7 +70,7 @@ public class SelectionEngine {
                     if (angleToTest < 0) angleToTest += 360;
                     
                     List<List<Point>> rotatedStrokes = rotateStrokes(cand.strokes(), cand.centroid(), angleToTest);
-                    RasterRecognizer.RecognitionResult res = RasterRecognizer.recognize(rotatedStrokes, SymbolKind.SIGN);
+                    RasterRecognizer.RecognitionResult res = PointCloudRecognizer.recognize(rotatedStrokes, SymbolKind.SIGN);
                     calls++;
                     
                     if (bestSignRes == null || res.score > bestSignScore) {

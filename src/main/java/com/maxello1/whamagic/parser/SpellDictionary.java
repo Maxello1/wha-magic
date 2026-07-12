@@ -49,12 +49,14 @@ public class SpellDictionary {
         loaded = true;
 
         RasterRecognizer.clearTemplates();
+        PointCloudRecognizer.clearTemplates();
 
         int sigilCount = loadFromResource("/data/wha-magic/dictionary/sigils.json", "sigil");
         int signCount = loadFromResource("/data/wha-magic/dictionary/signs.json", "sign");
 
-        LOGGER.info("SpellDictionary loaded: {} sigils, {} signs ({} total templates)",
-                sigilCount, signCount, RasterRecognizer.getTemplateCount());
+        LOGGER.info("SpellDictionary loaded: {} sigils, {} signs ({} raster + {} $P templates)",
+                sigilCount, signCount, RasterRecognizer.getTemplateCount(),
+                PointCloudRecognizer.getTemplateCount());
     }
 
     /**
@@ -148,6 +150,7 @@ public class SpellDictionary {
                 }
 
                 RasterRecognizer.addTemplate(id, displayName, symbolKind, element, strokes, sigilSem, signSem, rules);
+                PointCloudRecognizer.registerTemplate(id, displayName, symbolKind, element, strokes, sigilSem, signSem, rules);
                 count++;
             }
         } catch (Exception e) {
