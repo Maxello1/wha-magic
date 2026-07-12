@@ -49,6 +49,7 @@ public class RecognitionMetricsTest {
         TreeMap<String, FixtureEntry> canonicalNegative = discoverFixtures(new File(fixturesRoot, "canonical/negative"));
         TreeMap<String, FixtureEntry> canonicalMulti = discoverFixtures(new File(fixturesRoot, "canonical/multi"));
         TreeMap<String, FixtureEntry> canonicalInvariance = discoverFixtures(new File(fixturesRoot, "canonical/invariance"));
+        TreeMap<String, FixtureEntry> canonicalRingShapes = discoverFixtures(new File(fixturesRoot, "canonical/ring_shapes"));
         TreeMap<String, FixtureEntry> holdoutPositive = discoverFixtures(new File(fixturesRoot, "holdout/positive"));
         TreeMap<String, FixtureEntry> holdoutNegative = discoverFixtures(new File(fixturesRoot, "holdout/negative"));
 
@@ -111,8 +112,11 @@ public class RecognitionMetricsTest {
             // Log ring detection for debugging
             if (result.ast != null && result.ast.ring() != null) {
                 var ring = result.ast.ring();
-                detailReport.append(String.format("  [RING] %s: ring detected (r=%.3f, completeness=%.3f, rmse=%.4f)\n",
-                        file.getName(), ring.radius(), ring.completeness(), ring.rmse()));
+                detailReport.append(String.format("  [RING] %s: ring detected (r=%.3f, completeness=%.3f, rmse=%.4f, " +
+                                "normRmse=%.4f, maxResid=%.4f, residStd=%.4f, medTangent=%.4f, p90Tangent=%.4f, circ=%.4f)\n",
+                        file.getName(), ring.radius(), ring.completeness(), ring.rmse(),
+                        ring.normalizedRmse(), ring.maxNormalizedResidual(), ring.residualStdDev(),
+                        ring.medianTangentAlignment(), ring.p90TangentAlignment(), ring.circularity()));
             }
 
             // Track limits
@@ -240,6 +244,7 @@ public class RecognitionMetricsTest {
                 falsePositives++;
                 falsePositiveDetails.add(file.getName() + ": got=" + String.join(", ", recognizedIds));
                 canonicalNegativeFailures.add(file.getName() + ": got=" + String.join(", ", recognizedIds));
+                appendSelectionDiagnostics(detailReport, file.getName(), result);
             }
         }
 
@@ -255,7 +260,9 @@ public class RecognitionMetricsTest {
             List<String> expectedSigns = getExpectedSigns(fixture);
 
             List<List<Point>> strokes = parseStrokes(fixture);
+            long parseStartNanos = System.nanoTime();
             SpellParser.ParseResult result = SpellParser.parse(strokes);
+            double parseDurationMs = (System.nanoTime() - parseStartNanos) / 1_000_000.0;
 
             // Determinism check
             SpellParser.ParseResult result2 = SpellParser.parse(strokes);
@@ -282,14 +289,18 @@ public class RecognitionMetricsTest {
 
             String expectedLabel = formatExpected(expectedSigils, expectedSigns);
             List<String> recognizedIds = getRecognizedIds(result);
-            report.append(String.format("%-35s expected=%-20s recognized=%-30s\n",
+            int recognitionCalls = result.debugResult != null ? result.debugResult.recognitionCalls() : 0;
+            int candidateCount = result.debugResult != null ? result.debugResult.candidateCount() : 0;
+            report.append(String.format("%-35s expected=%-20s recognized=%-30s calls=%-4d candidates=%-4d parseMs=%.3f\n",
                     file.getName(), expectedLabel.isEmpty() ? "(none)" : expectedLabel,
-                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds)));
+                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds),
+                    recognitionCalls, candidateCount, parseDurationMs));
 
             if (!sigilMatch || !signMatch) {
                 canonicalMultiFailures.add(file.getName()
                         + ": expected_sigils=" + expectedSigils + " expected_signs=" + expectedSigns
                         + " got_sigils=" + recognizedSigils + " got_signs=" + recognizedSigns);
+                appendSelectionDiagnostics(detailReport, file.getName(), result);
             } else {
                 totalPositive++;
                 top1Correct++;
@@ -500,6 +511,16 @@ public class RecognitionMetricsTest {
                 "Canonical negative fixtures must not be empty");
         assertFalse(canonicalMulti.isEmpty(),
                 "Canonical multi-symbol fixtures must not be empty");
+        assertFalse(canonicalInvariance.isEmpty(),
+                "Canonical invariance fixtures must not be empty");
+        assertFalse(canonicalRingShapes.isEmpty(),
+                "Canonical ring-shape fixtures must not be empty");
+        assertTrue(canonicalMulti.containsKey("spell_earth_levitation_x2.json"),
+                "Earth + Levitation x2 fixture must exist");
+        assertTrue(canonicalMulti.containsKey("spell_earth_levitation_x3.json"),
+                "Earth + Levitation x3 fixture must exist");
+        assertTrue(canonicalMulti.containsKey("spell_messy_multi.json"),
+                "Messy multi-symbol fixture must exist");
 
         // 1. Determinism: all results must be identical across runs
         assertTrue(deterministicFailures.isEmpty(),
@@ -762,6 +783,43 @@ public class RecognitionMetricsTest {
     // ---- Data types ----
 
     private record FixtureEntry(File file, JsonObject fixture) {}
+
+    private void appendSelectionDiagnostics(StringBuilder out, String fileName, SpellParser.ParseResult result) {
+        out.append("  [SELECTION DETAIL] ").append(fileName).append(':').append('\n');
+        if (result.debugResult == null) {
+            out.append("    (no debug result)\n\n");
+            return;
+        }
+        out.append("    Primitive groups: ");
+        for (com.maxello1.whamagic.magic.PrimitiveStrokeGroup group : result.debugResult.primitiveGroups()) {
+            out.append('#').append(group.id()).append(group.sourceStrokeIndices()).append(' ');
+        }
+        out.append('\n');
+        out.append("    Selected candidates: ");
+        for (com.maxello1.whamagic.magic.SymbolCandidate candidate : result.debugResult.selectedCandidates()) {
+            out.append('#').append(candidate.id())
+                    .append(candidate.sourceStrokeIndices())
+                    .append(candidate.isSuperCandidate() ? "(super) " : " ");
+        }
+        out.append('\n');
+        List<EvaluatedCandidate> evaluated = result.debugResult.allEvaluated();
+        int limit = evaluated.size();
+        for (int i = 0; i < limit; i++) {
+            EvaluatedCandidate eval = evaluated.get(i);
+            out.append(String.format(
+                    "    #%d strokes=%s super=%s sigil=%s sign=%s role=(%.3f,%.3f)%n",
+                    eval.cand.id(), eval.cand.sourceStrokeIndices(), eval.cand.isSuperCandidate(),
+                    recognitionSummary(eval.sigilRes), recognitionSummary(eval.signRes),
+                    eval.sigilRoleScore, eval.signRoleScore));
+        }
+        out.append('\n');
+    }
+
+    private String recognitionSummary(RasterRecognizer.RecognitionResult result) {
+        if (result == null) return "none";
+        return String.format("%s/%.3f/%s/%s", result.id, result.score,
+                result.recognized, result.rejectionReason);
+    }
 
     /**
      * Append detailed diagnostic information for a single positive fixture.

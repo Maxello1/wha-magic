@@ -191,7 +191,9 @@ public class CandidateGenerator {
         
         int n = strokes.size();
         double refSize = ring != null ? ring.radius() * 2 : 1.0;
-        double directThresh = 0.02; // direct endpoint proximity
+        // Detached rays and accents belonging to one symbol may not touch exactly.
+        // A 0.06 gap groups the current Wind geometry while keeping its nearest rim sign separate.
+        double directThresh = 0.06;
         double directThreshSq = directThresh * directThresh;
         double maxGroupSpan = refSize * settings.maxInternalGapRatio() * 2; // max span before splitting
         
@@ -446,7 +448,9 @@ public class CandidateGenerator {
         if (ring != null) {
             if (cand.bounds().width() > ring.radius() * 2 * settings.maxCandidateWidthRatio()) return false;
             if (cand.bounds().height() > ring.radius() * 2 * settings.maxCandidateHeightRatio()) return false;
-            if (cand.angularSpan() > settings.maxAngularSpanDeg()) return false;
+            // Ring-relative angles are unstable for central sigils and only
+            // constrain outward candidates where they represent layout span.
+            if (cand.radialPosition() > 0.25 && cand.angularSpan() > settings.maxAngularSpanDeg()) return false;
         }
         return true;
     }
