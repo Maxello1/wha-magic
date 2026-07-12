@@ -59,6 +59,12 @@ public class PointCloudRecognizer implements SymbolRecognizer {
     /** Weight of turning angle in $P+ distance calculation. */
     private static final double ANGLE_WEIGHT = 0.15;
 
+    /** Closed templates above this value are meaningfully asymmetric. */
+    private static final double ASYMMETRIC_TEMPLATE_MIN = 0.06;
+
+    /** Reject a closed candidate when it is far more symmetric than its template. */
+    private static final double MIN_ASYMMETRY_RATIO = 0.45;
+
     // ---- Data Structures ----
 
     /**
@@ -81,13 +87,17 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         public final com.maxello1.whamagic.magic.SymbolKind kind;
         public final String element;
         public final CloudPoint[] points; // always length N after normalization
+        public final int strokeCount; // original number of strokes in the template
+        public final boolean closedSingleStroke;
+        public final double centralSymmetryError;
         public final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
         public final com.maxello1.whamagic.magic.SignSemantic signSemantic;
         public final com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules;
 
         public PointCloudTemplate(String id, String displayName,
                                   com.maxello1.whamagic.magic.SymbolKind kind, String element,
-                                  CloudPoint[] points,
+                                  CloudPoint[] points, int strokeCount, boolean closedSingleStroke,
+                                  double centralSymmetryError,
                                   com.maxello1.whamagic.magic.SigilSemantic sigilSemantic,
                                   com.maxello1.whamagic.magic.SignSemantic signSemantic,
                                   com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules) {
@@ -96,6 +106,9 @@ public class PointCloudRecognizer implements SymbolRecognizer {
             this.kind = kind;
             this.element = element;
             this.points = points;
+            this.strokeCount = strokeCount;
+            this.closedSingleStroke = closedSingleStroke;
+            this.centralSymmetryError = centralSymmetryError;
             this.sigilSemantic = sigilSemantic;
             this.signSemantic = signSemantic;
             this.recognitionRules = recognitionRules;
@@ -146,7 +159,10 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                                         com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules) {
         CloudPoint[] cloud = strokesToCloud(strokes);
         CloudPoint[] normalized = normalize(cloud, N);
-        templates.add(new PointCloudTemplate(id, displayName, kind, element, normalized,
+        boolean closedSingleStroke = isClosedSingleStroke(strokes);
+        double symmetryError = closedSingleStroke ? centralSymmetryError(normalized) : 0.0;
+        templates.add(new PointCloudTemplate(id, displayName, kind, element, normalized, strokes.size(),
+                closedSingleStroke, symmetryError,
                 sigilSemantic, signSemantic, recognitionRules));
         LOGGER.debug("Registered $P template '{}' ({} strokes -> {} points)", id, strokes.size(), N);
     }
@@ -179,6 +195,8 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                     null, null, com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES);
         }
         CloudPoint[] candidate = normalize(candidateCloud, N);
+        boolean candidateClosedSingleStroke = isClosedSingleStroke(strokes);
+        double candidateSymmetryError = candidateClosedSingleStroke ? centralSymmetryError(candidate) : 0.0;
 
         // Match against each template of the expected kind
         List<TemplateScore> scored = new ArrayList<>();
@@ -186,6 +204,29 @@ public class PointCloudRecognizer implements SymbolRecognizer {
             if (tmpl.kind != expectedKind) continue;
             double distance = greedyCloudMatch(candidate, tmpl.points, N);
             double score = Math.max((2.0 - distance) / 2.0, 0.0);
+            if (candidateClosedSingleStroke && tmpl.closedSingleStroke
+                    && tmpl.centralSymmetryError >= ASYMMETRIC_TEMPLATE_MIN
+                    && candidateSymmetryError < tmpl.centralSymmetryError * MIN_ASYMMETRY_RATIO) {
+                score = 0.0;
+            }
+            // Stroke-count completeness check:
+            // 1. Missing strokes: reject strictly. Prevents incomplete symbols (like Light missing a square) from matching.
+            // 2. Too many extra strokes: reject if more than double. Prevents complex drawings from matching simple 1-stroke shapes.
+            // 3. Moderate extra strokes: allow with mild penalty. This is CRITICAL for multi-symbol spells where
+            //    CandidateGenerator might group multiple symbols into a single super-candidate (e.g. 7 wind + 2 column = 9 strokes).
+            int candidateStrokeCount = strokes.size();
+            int templateStrokeCount = tmpl.strokeCount;
+            if (candidateStrokeCount < templateStrokeCount) {
+                // Missing strokes: strictly reject
+                score = 0;
+            } else if (candidateStrokeCount > templateStrokeCount * 2) {
+                // More than double the strokes: reject (e.g. 5-stroke candidate vs 1-stroke template)
+                score = 0;
+            } else if (candidateStrokeCount > templateStrokeCount) {
+                // Moderate extra strokes: mild proportional penalty
+                double ratio = (double) templateStrokeCount / candidateStrokeCount;
+                score *= Math.pow(ratio, 0.5);
+            }
             scored.add(new TemplateScore(tmpl, score, distance));
         }
 
@@ -616,6 +657,61 @@ public class PointCloudRecognizer implements SymbolRecognizer {
     }
 
     // ---- Utilities ----
+
+    private static boolean isClosedSingleStroke(List<List<Point>> strokes) {
+        if (strokes.size() != 1 || strokes.get(0).size() < 4) return false;
+        List<Point> stroke = strokes.get(0);
+        Point first = stroke.get(0);
+        Point last = stroke.get(stroke.size() - 1);
+
+        double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        for (Point point : stroke) {
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+        }
+        double diagonal = Math.hypot(maxX - minX, maxY - minY);
+        double closureGap = Math.hypot(first.x - last.x, first.y - last.y);
+        return diagonal > 1e-10 && closureGap <= diagonal * 0.08;
+    }
+
+    /**
+     * Mean distance from each point's reflection through the centroid to the
+     * nearest cloud point, normalized by the cloud diagonal.
+     */
+    private static double centralSymmetryError(CloudPoint[] points) {
+        if (points.length == 0) return 0.0;
+        double cx = 0, cy = 0;
+        double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        for (CloudPoint point : points) {
+            cx += point.x();
+            cy += point.y();
+            minX = Math.min(minX, point.x());
+            minY = Math.min(minY, point.y());
+            maxX = Math.max(maxX, point.x());
+            maxY = Math.max(maxY, point.y());
+        }
+        cx /= points.length;
+        cy /= points.length;
+        double diagonal = Math.hypot(maxX - minX, maxY - minY);
+        if (diagonal < 1e-10) return 0.0;
+
+        double error = 0.0;
+        for (CloudPoint point : points) {
+            double reflectedX = 2.0 * cx - point.x();
+            double reflectedY = 2.0 * cy - point.y();
+            double nearest = Double.MAX_VALUE;
+            for (CloudPoint other : points) {
+                nearest = Math.min(nearest,
+                        Math.hypot(other.x() - reflectedX, other.y() - reflectedY));
+            }
+            error += nearest;
+        }
+        return error / points.length / diagonal;
+    }
 
     /**
      * $P+ distance: combines spatial distance with angular difference.

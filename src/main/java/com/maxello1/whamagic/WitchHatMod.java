@@ -101,7 +101,6 @@ public class WitchHatMod implements ModInitializer {
                 com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(payload.strokes());
                 net.minecraft.world.item.ItemStack newStack = stack.copy();
                 applyParseResultToStack(newStack, result, payload.strokes());
-                newStack.set(STROKES_COMPONENT, payload.strokes());
                 context.player().setItemInHand(usedHand, newStack);
                 context.player().getInventory().setChanged();
                 if (context.player() instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
@@ -118,18 +117,15 @@ public class WitchHatMod implements ModInitializer {
     }
 
     /**
-     * Apply a parse result to an item stack by setting or removing the StoredSpell component.
-     * Extracted so both the network handler and tests exercise the same production code path.
+     * Apply a parse result to an item stack by setting or removing the StoredSpell component
+     * and always storing the raw strokes. This represents the complete item-update operation
+     * so both the network handler and tests exercise the same production code path.
      */
     public static void applyParseResultToStack(
             net.minecraft.world.item.ItemStack stack,
             com.maxello1.whamagic.parser.SpellParser.ParseResult result,
             java.util.List<java.util.List<com.maxello1.whamagic.parser.Point>> strokes) {
-        if (result.isValidSpell()) {
-            stack.set(STORED_SPELL_COMPONENT,
-                    com.maxello1.whamagic.magic.StoredSpell.fromIr(result.ir, strokes));
-        } else {
-            stack.remove(STORED_SPELL_COMPONENT);
-        }
+        com.maxello1.whamagic.magic.SpellStackUpdater.applyParseResultToStack(
+                stack, result, strokes, STORED_SPELL_COMPONENT, STROKES_COMPONENT);
     }
 }
