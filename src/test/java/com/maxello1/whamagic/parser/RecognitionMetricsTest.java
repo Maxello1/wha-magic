@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.maxello1.whamagic.magic.CandidateGenerationSettings;
 import com.maxello1.whamagic.magic.RecognitionAlternative;
 import com.maxello1.whamagic.magic.RecognitionRejectionReason;
 import com.maxello1.whamagic.parser.SelectionEngine.EvaluatedCandidate;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
@@ -30,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.*;
 public class RecognitionMetricsTest {
 
     private static final Gson GSON = new Gson();
-    private static final int MAX_RECOGNITION_CALLS = 512;
+    private static final int MAX_RECOGNITION_CALLS = CandidateGenerationSettings.DEFAULTS.maxRecognitionCalls();
 
     @BeforeAll
     public static void setup() {
@@ -43,11 +45,12 @@ public class RecognitionMetricsTest {
         assertTrue(fixturesRoot.exists() && fixturesRoot.isDirectory(), "Fixtures directory must exist");
 
         // Discover fixtures from each category (sorted by name for deterministic ordering)
-        TreeMap<String, FixtureEntry> canonicalPositive = discoverFixtures(new File(fixturesRoot, "canonical/positive"), "canonical-positive");
-        TreeMap<String, FixtureEntry> canonicalNegative = discoverFixtures(new File(fixturesRoot, "canonical/negative"), "canonical-negative");
-        TreeMap<String, FixtureEntry> canonicalMulti = discoverFixtures(new File(fixturesRoot, "canonical/multi"), "canonical-multi");
-        TreeMap<String, FixtureEntry> holdoutPositive = discoverFixtures(new File(fixturesRoot, "holdout/positive"), "holdout-positive");
-        TreeMap<String, FixtureEntry> holdoutNegative = discoverFixtures(new File(fixturesRoot, "holdout/negative"), "holdout-negative");
+        TreeMap<String, FixtureEntry> canonicalPositive = discoverFixtures(new File(fixturesRoot, "canonical/positive"));
+        TreeMap<String, FixtureEntry> canonicalNegative = discoverFixtures(new File(fixturesRoot, "canonical/negative"));
+        TreeMap<String, FixtureEntry> canonicalMulti = discoverFixtures(new File(fixturesRoot, "canonical/multi"));
+        TreeMap<String, FixtureEntry> canonicalInvariance = discoverFixtures(new File(fixturesRoot, "canonical/invariance"));
+        TreeMap<String, FixtureEntry> holdoutPositive = discoverFixtures(new File(fixturesRoot, "holdout/positive"));
+        TreeMap<String, FixtureEntry> holdoutNegative = discoverFixtures(new File(fixturesRoot, "holdout/negative"));
 
         int totalPositive = 0;
         int totalNegative = 0;
@@ -94,13 +97,16 @@ public class RecognitionMetricsTest {
             List<List<Point>> strokes = parseStrokes(fixture);
             SpellParser.ParseResult result = SpellParser.parse(strokes);
 
-            // Determinism check: run again and verify identical results
+            // Determinism check: run again and verify full structural fingerprint
             SpellParser.ParseResult result2 = SpellParser.parse(strokes);
-            List<String> ids1 = getRecognizedIds(result);
-            List<String> ids2 = getRecognizedIds(result2);
-            if (!multisetEquals(ids1, ids2)) {
-                deterministicFailures.add(file.getName() + ": run1=" + ids1 + " run2=" + ids2);
+            String fp1 = buildDeterminismFingerprint(result);
+            String fp2 = buildDeterminismFingerprint(result2);
+            if (!fp1.equals(fp2)) {
+                deterministicFailures.add(file.getName() + ": fingerprint mismatch");
             }
+
+            // Enforce expectRing and expectValidSpell metadata
+            enforceFixtureMetadata(fixture, result, file.getName(), canonicalPositiveFailures);
 
             // Log ring detection for debugging
             if (result.ast != null && result.ast.ring() != null) {
@@ -208,11 +214,14 @@ public class RecognitionMetricsTest {
 
             // Determinism check
             SpellParser.ParseResult result2 = SpellParser.parse(strokes);
-            List<String> ids1 = getRecognizedIds(result);
-            List<String> ids2 = getRecognizedIds(result2);
-            if (!multisetEquals(ids1, ids2)) {
-                deterministicFailures.add(file.getName() + ": run1=" + ids1 + " run2=" + ids2);
+            String fp1 = buildDeterminismFingerprint(result);
+            String fp2 = buildDeterminismFingerprint(result2);
+            if (!fp1.equals(fp2)) {
+                deterministicFailures.add(file.getName() + ": fingerprint mismatch");
             }
+
+            // Enforce metadata
+            enforceFixtureMetadata(fixture, result, file.getName(), canonicalNegativeFailures);
 
             // Track limits
             if (result.debugResult != null) {
@@ -250,11 +259,14 @@ public class RecognitionMetricsTest {
 
             // Determinism check
             SpellParser.ParseResult result2 = SpellParser.parse(strokes);
-            List<String> ids1 = getRecognizedIds(result);
-            List<String> ids2 = getRecognizedIds(result2);
-            if (!multisetEquals(ids1, ids2)) {
-                deterministicFailures.add(file.getName() + ": run1=" + ids1 + " run2=" + ids2);
+            String fp1 = buildDeterminismFingerprint(result);
+            String fp2 = buildDeterminismFingerprint(result2);
+            if (!fp1.equals(fp2)) {
+                deterministicFailures.add(file.getName() + ": fingerprint mismatch");
             }
+
+            // Enforce metadata
+            enforceFixtureMetadata(fixture, result, file.getName(), canonicalMultiFailures);
 
             // Track limits
             if (result.debugResult != null) {
@@ -282,6 +294,56 @@ public class RecognitionMetricsTest {
                 totalPositive++;
                 top1Correct++;
                 top3Correct++;
+            }
+        }
+
+        // --- Canonical invariance assertions ---
+        List<String> canonicalInvarianceFailures = new ArrayList<>();
+
+        for (Map.Entry<String, FixtureEntry> entry : canonicalInvariance.entrySet()) {
+            FixtureEntry fe = entry.getValue();
+            JsonObject fixture = fe.fixture;
+            File file = fe.file;
+
+            List<String> expectedSigils = getExpectedSigils(fixture);
+            List<String> expectedSigns = getExpectedSigns(fixture);
+
+            List<List<Point>> strokes = parseStrokes(fixture);
+            SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+            // Determinism check
+            SpellParser.ParseResult result2 = SpellParser.parse(strokes);
+            String fp1 = buildDeterminismFingerprint(result);
+            String fp2 = buildDeterminismFingerprint(result2);
+            if (!fp1.equals(fp2)) {
+                deterministicFailures.add(file.getName() + ": fingerprint mismatch");
+            }
+
+            // Enforce metadata
+            enforceFixtureMetadata(fixture, result, file.getName(), canonicalInvarianceFailures);
+
+            // Track limits
+            if (result.debugResult != null) {
+                maxCandidates = Math.max(maxCandidates, result.debugResult.candidateCount());
+                maxRecognitionCalls = Math.max(maxRecognitionCalls, result.debugResult.recognitionCalls());
+            }
+
+            List<String> recognizedSigils = getRecognizedSigils(result);
+            List<String> recognizedSigns = getRecognizedSigns(result);
+
+            boolean sigilMatch = multisetEquals(recognizedSigils, expectedSigils);
+            boolean signMatch = multisetEquals(recognizedSigns, expectedSigns);
+
+            String expectedLabel = formatExpected(expectedSigils, expectedSigns);
+            List<String> recognizedIds = getRecognizedIds(result);
+            report.append(String.format("%-35s expected=%-20s recognized=%-30s [invariance]\n",
+                    file.getName(), expectedLabel.isEmpty() ? "(none)" : expectedLabel,
+                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds)));
+
+            if (!sigilMatch || !signMatch) {
+                canonicalInvarianceFailures.add(file.getName()
+                        + ": expected_sigils=" + expectedSigils + " expected_signs=" + expectedSigns
+                        + " got_sigils=" + recognizedSigils + " got_signs=" + recognizedSigns);
             }
         }
 
@@ -431,6 +493,14 @@ public class RecognitionMetricsTest {
 
         // === HARD ASSERTIONS ===
 
+        // 0. Required categories must not be empty
+        assertFalse(canonicalPositive.isEmpty(),
+                "Canonical positive fixtures must not be empty");
+        assertFalse(canonicalNegative.isEmpty(),
+                "Canonical negative fixtures must not be empty");
+        assertFalse(canonicalMulti.isEmpty(),
+                "Canonical multi-symbol fixtures must not be empty");
+
         // 1. Determinism: all results must be identical across runs
         assertTrue(deterministicFailures.isEmpty(),
                 "Recognition must be deterministic. Failures:\n  " + String.join("\n  ", deterministicFailures));
@@ -450,31 +520,39 @@ public class RecognitionMetricsTest {
                 "All canonical multi-symbol fixtures must match IDs and multiplicity. Failures:\n  "
                         + String.join("\n  ", canonicalMultiFailures));
 
-        // 5. Recognition calls must not exceed configured maximum
+        // 5. Canonical invariance: 100% must be recognised correctly
+        assertTrue(canonicalInvarianceFailures.isEmpty(),
+                "All canonical invariance fixtures must be recognised correctly. Failures:\n  "
+                        + String.join("\n  ", canonicalInvarianceFailures));
+
+        // 6. Recognition calls must not exceed configured maximum
         assertTrue(maxRecognitionCalls <= MAX_RECOGNITION_CALLS,
                 "Max recognition calls " + maxRecognitionCalls + " exceeds limit of " + MAX_RECOGNITION_CALLS);
     }
 
     // ---- Fixture discovery ----
 
-    private TreeMap<String, FixtureEntry> discoverFixtures(File dir, String category) throws Exception {
+    private TreeMap<String, FixtureEntry> discoverFixtures(File dir) throws Exception {
         TreeMap<String, FixtureEntry> fixtures = new TreeMap<>();
         if (!dir.exists() || !dir.isDirectory()) {
             return fixtures;
         }
-        collectFixturesRecursive(dir, fixtures);
+        Path root = dir.toPath();
+        collectFixturesRecursive(dir, root, fixtures);
         return fixtures;
     }
 
-    private void collectFixturesRecursive(File dir, TreeMap<String, FixtureEntry> fixtures) throws Exception {
+    private void collectFixturesRecursive(File dir, Path root, TreeMap<String, FixtureEntry> fixtures) throws Exception {
         File[] children = dir.listFiles();
         if (children == null) return;
         for (File child : children) {
             if (child.isDirectory()) {
-                collectFixturesRecursive(child, fixtures);
+                collectFixturesRecursive(child, root, fixtures);
             } else if (child.getName().endsWith(".json")) {
                 JsonObject fixture = GSON.fromJson(new FileReader(child), JsonObject.class);
-                fixtures.put(child.getName(), new FixtureEntry(child, fixture));
+                // Use path relative to category root to avoid key collisions
+                String key = root.relativize(child.toPath()).toString().replace('\\', '/');
+                fixtures.put(key, new FixtureEntry(child, fixture));
             }
         }
     }
@@ -593,6 +671,83 @@ public class RecognitionMetricsTest {
         Collections.sort(sortedA);
         Collections.sort(sortedB);
         return sortedA.equals(sortedB);
+    }
+
+    // ---- Determinism fingerprint ----
+
+    /**
+     * Build a structured determinism fingerprint from a parse result.
+     * Covers: symbol IDs, source-stroke assignments, candidate states,
+     * rejection reasons, recognition-call count, and scores (rounded to 1e-6).
+     */
+    private String buildDeterminismFingerprint(SpellParser.ParseResult result) {
+        StringBuilder fp = new StringBuilder();
+        // Sigils sorted by ID then source strokes
+        if (result.ast != null && result.ast.sigils() != null) {
+            List<String> sigilEntries = new ArrayList<>();
+            for (var sigil : result.ast.sigils()) {
+                List<Integer> sorted = new ArrayList<>(sigil.sourceStrokeIndices());
+                Collections.sort(sorted);
+                long roundedScore = Math.round(sigil.recognitionConfidence() * 1e6);
+                sigilEntries.add("SIGIL:" + sigil.id().getPath() + ":strokes=" + sorted
+                        + ":score=" + roundedScore + ":reason=" + sigil.rejectionReason());
+            }
+            Collections.sort(sigilEntries);
+            fp.append(String.join("|", sigilEntries));
+        }
+        fp.append(";");
+        // Signs sorted by ID
+        if (result.ast != null && result.ast.signs() != null) {
+            List<String> signEntries = new ArrayList<>();
+            for (var sign : result.ast.signs()) {
+                long roundedScore = Math.round(sign.confidence() * 1e6);
+                signEntries.add("SIGN:" + sign.id() + ":score=" + roundedScore);
+            }
+            Collections.sort(signEntries);
+            fp.append(String.join("|", signEntries));
+        }
+        fp.append(";");
+        // Unknowns sorted by candidate ID
+        if (result.ast != null && result.ast.unknownSymbols() != null) {
+            List<String> unknownEntries = new ArrayList<>();
+            for (var unk : result.ast.unknownSymbols()) {
+                List<Integer> sorted = new ArrayList<>(unk.sourceStrokeIndices());
+                Collections.sort(sorted);
+                unknownEntries.add("UNK:" + unk.candidateId() + ":strokes=" + sorted
+                        + ":state=" + unk.state() + ":reason=" + unk.rejectionReason());
+            }
+            Collections.sort(unknownEntries);
+            fp.append(String.join("|", unknownEntries));
+        }
+        fp.append(";");
+        // Recognition call count
+        if (result.debugResult != null) {
+            fp.append("calls=" + result.debugResult.recognitionCalls());
+        }
+        return fp.toString();
+    }
+
+    // ---- Fixture metadata enforcement ----
+
+    /**
+     * Enforce expectRing and expectValidSpell for both true and false values.
+     */
+    private void enforceFixtureMetadata(JsonObject fixture, SpellParser.ParseResult result,
+                                        String fileName, List<String> failures) {
+        if (fixture.has("expectRing")) {
+            boolean expected = fixture.get("expectRing").getAsBoolean();
+            boolean actual = result.ast != null && result.ast.ring() != null;
+            if (expected != actual) {
+                failures.add(fileName + ": expectRing=" + expected + " actual=" + actual);
+            }
+        }
+        if (fixture.has("expectValidSpell")) {
+            boolean expected = fixture.get("expectValidSpell").getAsBoolean();
+            boolean actual = result.isValidSpell();
+            if (expected != actual) {
+                failures.add(fileName + ": expectValidSpell=" + expected + " actual=" + actual);
+            }
+        }
     }
 
     // ---- Formatting helpers ----

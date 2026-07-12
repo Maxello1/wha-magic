@@ -56,9 +56,11 @@ public class SelectionEngine {
             
             // Optimization: skip irrelevant tests based on radial position.
             // Candidates near center are likely sigils; candidates near edge are likely signs.
-            // Overlap zone (0.35-0.50) and standalone candidates (no ring, position 0) test as both.
-            boolean likelySigil = cand.radialPosition() < 0.50;
-            boolean likelySign = cand.radialPosition() > 0.35 || cand.radialPosition() < 0.05;
+            // In multi-symbol spells, sigils may be placed anywhere inside the ring,
+            // so the sigil zone extends up to 0.85 of the ring radius.
+            // Overlap zone (0.25-0.85) and standalone candidates (no ring, position 0) test as both.
+            boolean likelySigil = cand.radialPosition() < 0.85;
+            boolean likelySign = cand.radialPosition() > 0.25 || cand.radialPosition() < 0.05;
             
             RasterRecognizer.RecognitionResult sigilRes = null;
             double sigilScore = 0;
@@ -244,6 +246,15 @@ public class SelectionEngine {
                     // random shapes can match via the weaker interpretation.
                     res = fallbackRes;
                     selectedAsSigil = !isSigil;
+                }
+                
+                // Noise-discarded candidates are skipped entirely.
+                // They don't claim strokes — if diagnostics are needed later,
+                // a separate discardedStrokeIndices collection can be added.
+                RasterRecognizer.RecognitionResult bestRes = pickBestResult(eval);
+                if (bestRes != null
+                        && bestRes.rejectionReason == RecognitionRejectionReason.NOISE_DISCARDED) {
+                    continue;
                 }
                 
                 // An unknown super-candidate can NEVER claim strokes before recognised sub-candidates

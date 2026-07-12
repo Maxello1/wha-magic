@@ -31,13 +31,13 @@ public class CandidateGenerator {
         int n = primitives.size();
         
         // Insert the all-strokes super-candidate FIRST so it is always tested.
-        // For complex symbols like Light (6+ strokes), the individual sub-candidates
-        // may extend beyond the ring's geometric validation bounds, but the combined
-        // drawing must still be tested as a single sigil.
+        // Uses relaxed geometric limits compared to normal sub-candidates.
         if (n > 1) {
             SymbolCandidate allStrokesCandidate = buildCandidate(new ArrayList<>(primitives), ring, 0)
                     .withSuperCandidate();
-            candidates.add(allStrokesCandidate);
+            if (isValidSuperCandidate(allStrokesCandidate, ring)) {
+                candidates.add(allStrokesCandidate);
+            }
         }
         
         // Build proximity adjacency to avoid combining distant groups
@@ -447,6 +447,35 @@ public class CandidateGenerator {
             if (cand.bounds().width() > ring.radius() * 2 * settings.maxCandidateWidthRatio()) return false;
             if (cand.bounds().height() > ring.radius() * 2 * settings.maxCandidateHeightRatio()) return false;
             if (cand.angularSpan() > settings.maxAngularSpanDeg()) return false;
+        }
+        return true;
+    }
+    
+    /**
+     * Relaxed validation for the all-strokes super-candidate.
+     * Allows up to 1.10× the ring diameter (vs 0.75× for normal candidates)
+     * to accommodate slight drawing overflow, but rejects degenerate inputs.
+     * No angular span limit — the super-candidate spans everything by definition.
+     */
+    private static boolean isValidSuperCandidate(SymbolCandidate cand, RingDetector.RingGlyph ring) {
+        if (cand.strokes().isEmpty() || cand.sourceStrokeIndices().isEmpty()) {
+            return false;
+        }
+        if (!Double.isFinite(cand.bounds().width()) || !Double.isFinite(cand.bounds().height())) {
+            return false;
+        }
+        if (cand.bounds().width() <= 0 || cand.bounds().height() <= 0) {
+            return false;
+        }
+        if (ring != null) {
+            double diameter = ring.radius() * 2.0;
+            // Small tolerance for drawing near the ring boundary.
+            if (cand.bounds().width() > diameter * 1.10) return false;
+            if (cand.bounds().height() > diameter * 1.10) return false;
+        } else {
+            // Canvas-space sanity check for standalone drawings.
+            if (cand.bounds().width() > 1.0) return false;
+            if (cand.bounds().height() > 1.0) return false;
         }
         return true;
     }
