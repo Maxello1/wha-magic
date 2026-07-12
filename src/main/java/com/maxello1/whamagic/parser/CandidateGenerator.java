@@ -11,7 +11,14 @@ import java.util.Comparator;
 
 public class CandidateGenerator {
 
-    public static List<SymbolCandidate> generateCandidates(List<List<Point>> strokes, RingDetector.RingGlyph ring, CandidateGenerationSettings settings) {
+    /** Result of candidate generation, including diagnostic data. */
+    public record GenerationResult(
+        List<PrimitiveStrokeGroup> primitiveGroups,
+        List<SymbolCandidate> candidates,
+        boolean candidateLimitReached
+    ) {}
+
+    public static GenerationResult generateCandidates(List<List<Point>> strokes, RingDetector.RingGlyph ring, CandidateGenerationSettings settings) {
         List<PrimitiveStrokeGroup> primitives = groupPrimitives(strokes, ring);
         
         if (primitives.size() > settings.maxPrimitiveGroups()) {
@@ -20,6 +27,7 @@ public class CandidateGenerator {
         }
         
         List<SymbolCandidate> candidates = new ArrayList<>();
+        boolean limitReached = false;
         int n = primitives.size();
         
         int maxK = Math.min(n, settings.maxGroupsPerCandidate());
@@ -28,6 +36,7 @@ public class CandidateGenerator {
             generateCombinations(primitives, k, 0, new ArrayList<>(), combos);
             for (List<PrimitiveStrokeGroup> combo : combos) {
                 if (candidates.size() >= settings.maxCandidates()) {
+                    limitReached = true;
                     break;
                 }
                 SymbolCandidate cand = buildCandidate(combo, ring, candidates.size());
@@ -36,11 +45,12 @@ public class CandidateGenerator {
                 }
             }
             if (candidates.size() >= settings.maxCandidates()) {
+                limitReached = true;
                 break;
             }
         }
         
-        return candidates;
+        return new GenerationResult(primitives, candidates, limitReached);
     }
     
     private static void generateCombinations(List<PrimitiveStrokeGroup> primitives, int k, int start, List<PrimitiveStrokeGroup> current, List<List<PrimitiveStrokeGroup>> result) {

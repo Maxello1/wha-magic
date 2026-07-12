@@ -50,16 +50,23 @@ public class SpellParser {
         }
         
         CandidateGenerationSettings settings = CandidateGenerationSettings.DEFAULTS;
-        List<SymbolCandidate> candidates = CandidateGenerator.generateCandidates(nonRingStrokes, ring, settings);
+        CandidateGenerator.GenerationResult genResult = CandidateGenerator.generateCandidates(nonRingStrokes, ring, settings);
         
-        SelectionEngine.SelectedSymbols selection = SelectionEngine.select(candidates, ring, settings.maxRecognitionCalls());
+        SelectionEngine.SelectedSymbols selection = SelectionEngine.select(genResult.candidates(), ring, settings.maxRecognitionCalls());
         
         SegmentationDebugResult debugResult = new SegmentationDebugResult(
-            new ArrayList<>(), // primitives
-            candidates,
+            genResult.primitiveGroups(),
+            genResult.candidates(),
             selection.selectedCandidates(),
             selection.recognitionCalls(),
-            false
+            genResult.candidateLimitReached(),
+            selection.sigils(),
+            selection.signs(),
+            selection.unknowns(),
+            genResult.primitiveGroups().size(),
+            genResult.candidates().size(),
+            selection.selectedCandidates().size(),
+            selection.allEvaluated()
         );
         
         GlyphAst ast = new GlyphAst(ring, selection.sigils(), selection.signs(), selection.unknowns());

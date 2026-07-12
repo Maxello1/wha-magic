@@ -180,9 +180,22 @@ public class RasterRecognizer {
         public final double score;
         public final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
         public final com.maxello1.whamagic.magic.SignSemantic signSemantic;
+        // Diagnostic fields
+        public final List<com.maxello1.whamagic.magic.RecognitionAlternative> alternatives;
+        public final double confidenceGap;
+        public final double thresholdUsed;
+        public final com.maxello1.whamagic.magic.RecognitionRejectionReason rejectionReason;
+        public final double templateCoverage;
+        public final double unexplainedInkRatio;
+        public final double structuralScore;
 
-        public RecognitionResult(boolean recognized, String id, String displayName, com.maxello1.whamagic.magic.SymbolKind kind, String element, double score,
-                                 com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem) {
+        public RecognitionResult(boolean recognized, String id, String displayName,
+                                 com.maxello1.whamagic.magic.SymbolKind kind, String element, double score,
+                                 com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem,
+                                 List<com.maxello1.whamagic.magic.RecognitionAlternative> alternatives,
+                                 double confidenceGap, double thresholdUsed,
+                                 com.maxello1.whamagic.magic.RecognitionRejectionReason rejectionReason,
+                                 double templateCoverage, double unexplainedInkRatio, double structuralScore) {
             this.recognized = recognized;
             this.id = id;
             this.displayName = displayName;
@@ -191,6 +204,22 @@ public class RasterRecognizer {
             this.score = score;
             this.sigilSemantic = sigilSem;
             this.signSemantic = signSem;
+            this.alternatives = alternatives != null ? alternatives : new ArrayList<>();
+            this.confidenceGap = confidenceGap;
+            this.thresholdUsed = thresholdUsed;
+            this.rejectionReason = rejectionReason;
+            this.templateCoverage = templateCoverage;
+            this.unexplainedInkRatio = unexplainedInkRatio;
+            this.structuralScore = structuralScore;
+        }
+
+        /** Convenience constructor for early-exit failures with no match data. */
+        public RecognitionResult(boolean recognized, String id, String displayName,
+                                 com.maxello1.whamagic.magic.SymbolKind kind, String element, double score,
+                                 com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem,
+                                 com.maxello1.whamagic.magic.RecognitionRejectionReason rejectionReason) {
+            this(recognized, id, displayName, kind, element, score, sigilSem, signSem,
+                 new ArrayList<>(), 0, MIN_CONFIDENCE, rejectionReason, 0, 0, 0);
         }
     }
 
@@ -212,16 +241,20 @@ public class RasterRecognizer {
     /**
      * Recognize drawn strokes against all registered templates of a specific kind.
      * Uses the raster ink overlay + structural feature scoring.
+     *
+     * Returns a RecognitionResult with the top 5 alternatives and full diagnostic data.
      */
     public static RecognitionResult recognize(List<List<Point>> strokes, com.maxello1.whamagic.magic.SymbolKind expectedKind) {
         if (strokes == null || strokes.isEmpty()) {
-            return new RecognitionResult(false, null, "No strokes", null, null, 0, null, null);
+            return new RecognitionResult(false, null, "No strokes", null, null, 0, null, null,
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES);
         }
 
         // Normalize candidate strokes
         TemplateNormalizer.NormalizedResult candidateNorm = TemplateNormalizer.normalize(strokes, SAMPLES_PER_STROKE);
         if (candidateNorm.strokes.isEmpty()) {
-            return new RecognitionResult(false, null, "No valid strokes", null, null, 0, null, null);
+            return new RecognitionResult(false, null, "No valid strokes", null, null, 0, null, null,
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES);
         }
 
         InkLayers candidateInk = renderInk(candidateNorm.strokes);
@@ -231,10 +264,8 @@ public class RasterRecognizer {
         double candidateAspectRatio = candidateNorm.sourceAspectRatio;
         int candidateStrokeCount = strokes.size();
 
-        // Score against every template
-        double bestScore = -1;
-        double secondScore = -1;
-        RasterTemplate bestTemplate = null;
+        // Collect all scored alternatives
+        List<ScoredAlternative> scored = new ArrayList<>();
 
         for (RasterTemplate template : templates) {
             if (expectedKind != null && template.kind != expectedKind) {
@@ -273,29 +304,83 @@ public class RasterRecognizer {
                     String.format("%.3f", profileScore),
                     String.format("%.3f", confidence));
 
-            if (confidence > bestScore) {
-                secondScore = bestScore;
-                bestScore = confidence;
-                bestTemplate = template;
-            } else if (confidence > secondScore) {
-                secondScore = confidence;
-            }
+            scored.add(new ScoredAlternative(template, confidence, structuralScore,
+                    inkScores.templateCoveredRatio, inkScores.candidateExplainedRatio,
+                    inkScores.unexplainedInkRatio));
         }
 
-        if (bestTemplate == null) {
-            return new RecognitionResult(false, null, "No templates", null, null, 0, null, null);
+        if (scored.isEmpty()) {
+            return new RecognitionResult(false, null, "No templates", null, null, 0, null, null,
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_TEMPLATES);
+        }
+
+        // Sort by confidence descending
+        scored.sort((a, b) -> Double.compare(b.confidence, a.confidence));
+
+        ScoredAlternative best = scored.get(0);
+        double secondScore = scored.size() > 1 ? scored.get(1).confidence : -1;
+        double gap = secondScore >= 0 ? best.confidence - secondScore : best.confidence;
+
+        // Build top 5 alternatives
+        List<com.maxello1.whamagic.magic.RecognitionAlternative> alternatives = new ArrayList<>();
+        int altCount = Math.min(5, scored.size());
+        for (int i = 0; i < altCount; i++) {
+            ScoredAlternative alt = scored.get(i);
+            alternatives.add(new com.maxello1.whamagic.magic.RecognitionAlternative(
+                    net.minecraft.resources.Identifier.tryParse(alt.template.id),
+                    alt.template.displayName,
+                    alt.template.kind,
+                    alt.confidence,
+                    0, // roleScore is set by SelectionEngine
+                    alt.templateCoverage,
+                    alt.candidateExplainedRatio,
+                    alt.unexplainedInkRatio,
+                    alt.structuralScore,
+                    0  // rotationDeg is set by SelectionEngine
+            ));
         }
 
         // Check ambiguity
-        boolean ambiguous = (bestScore - secondScore) < AMBIGUITY_GAP && secondScore >= 0;
+        boolean ambiguous = gap < AMBIGUITY_GAP && secondScore >= 0;
 
-        if (bestScore >= MIN_CONFIDENCE && !ambiguous) {
-            return new RecognitionResult(true, bestTemplate.id, bestTemplate.displayName,
-                    bestTemplate.kind, bestTemplate.element, bestScore, bestTemplate.sigilSemantic, bestTemplate.signSemantic);
+        // Determine rejection reason
+        com.maxello1.whamagic.magic.RecognitionRejectionReason reason;
+        if (best.confidence >= MIN_CONFIDENCE && !ambiguous) {
+            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE;
+        } else if (best.confidence < MIN_CONFIDENCE) {
+            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.SCORE_BELOW_THRESHOLD;
         } else {
-            return new RecognitionResult(false, bestTemplate.id,
-                    bestTemplate.displayName + " (" + String.format("%.0f%%", bestScore * 100) + ")",
-                    bestTemplate.kind, bestTemplate.element, bestScore, bestTemplate.sigilSemantic, bestTemplate.signSemantic);
+            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.AMBIGUOUS_TOP_MATCHES;
+        }
+
+        boolean recognized = reason == com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE;
+        String displayName = recognized ? best.template.displayName
+                : best.template.displayName + " (" + String.format("%.0f%%", best.confidence * 100) + ")";
+
+        return new RecognitionResult(recognized, best.template.id, displayName,
+                best.template.kind, best.template.element, best.confidence,
+                best.template.sigilSemantic, best.template.signSemantic,
+                alternatives, gap, MIN_CONFIDENCE, reason,
+                best.templateCoverage, best.unexplainedInkRatio, best.structuralScore);
+    }
+
+    /** Internal holder for per-template scoring during recognition. */
+    private static class ScoredAlternative {
+        final RasterTemplate template;
+        final double confidence;
+        final double structuralScore;
+        final double templateCoverage;
+        final double candidateExplainedRatio;
+        final double unexplainedInkRatio;
+
+        ScoredAlternative(RasterTemplate template, double confidence, double structuralScore,
+                          double templateCoverage, double candidateExplainedRatio, double unexplainedInkRatio) {
+            this.template = template;
+            this.confidence = confidence;
+            this.structuralScore = structuralScore;
+            this.templateCoverage = templateCoverage;
+            this.candidateExplainedRatio = candidateExplainedRatio;
+            this.unexplainedInkRatio = unexplainedInkRatio;
         }
     }
 

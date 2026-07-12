@@ -5,6 +5,7 @@ import com.maxello1.whamagic.magic.RecognizedSigil;
 import com.maxello1.whamagic.magic.RecognizedSign;
 import com.maxello1.whamagic.magic.UnknownSymbol;
 import com.maxello1.whamagic.magic.RecognitionAlternative;
+import com.maxello1.whamagic.magic.RecognitionRejectionReason;
 import com.maxello1.whamagic.magic.SymbolKind;
 import com.maxello1.whamagic.magic.CandidateState;
 import com.maxello1.whamagic.magic.ElementType;
@@ -18,7 +19,14 @@ import java.util.Set;
 
 public class SelectionEngine {
     
-    public record SelectedSymbols(List<RecognizedSigil> sigils, List<RecognizedSign> signs, List<UnknownSymbol> unknowns, List<SymbolCandidate> selectedCandidates, int recognitionCalls) {}
+    public record SelectedSymbols(
+        List<RecognizedSigil> sigils,
+        List<RecognizedSign> signs,
+        List<UnknownSymbol> unknowns,
+        List<SymbolCandidate> selectedCandidates,
+        int recognitionCalls,
+        List<EvaluatedCandidate> allEvaluated
+    ) {}
     
     public static SelectedSymbols select(List<SymbolCandidate> candidates, RingDetector.RingGlyph ring, int maxCalls) {
         int calls = 0;
@@ -93,12 +101,12 @@ public class SelectionEngine {
                     selectedCandidates.add(eval.cand);
                     usedStrokes.addAll(eval.cand.sourceStrokeIndices());
                     
+                    // Build alternatives with role scores populated
+                    List<RecognitionAlternative> alts = buildAlternatives(res, isSigil ? eval.sigilRoleScore : eval.signRoleScore, eval.bestAngle);
+                    
                     if (isSigil) {
                         ElementType el = null;
                         try { if (res.element != null) el = ElementType.valueOf(res.element.toUpperCase()); } catch (Exception ignored) {}
-                        
-                        List<RecognitionAlternative> alts = new ArrayList<>();
-                        alts.add(new RecognitionAlternative(Identifier.tryParse(res.id), res.displayName, res.score, SymbolKind.SIGIL));
                         
                         outSigils.add(new RecognizedSigil(
                             Identifier.tryParse(res.id),
@@ -108,7 +116,8 @@ public class SelectionEngine {
                             eval.cand.bounds(),
                             0,
                             eval.cand.sourceStrokeIndices(),
-                            alts
+                            alts,
+                            RecognitionRejectionReason.NONE
                         ));
                     } else {
                         outSigns.add(new RecognizedSign(
@@ -123,19 +132,80 @@ public class SelectionEngine {
                 } else {
                     selectedCandidates.add(eval.cand);
                     usedStrokes.addAll(eval.cand.sourceStrokeIndices());
+                    
+                    // Merge alternatives from both sigil and sign evaluations
+                    List<RecognitionAlternative> alts = mergeAlternatives(eval);
+                    RecognitionRejectionReason reason = determineRejectionReason(eval);
+                    
                     outUnknowns.add(new UnknownSymbol(
                         eval.cand.id(),
                         eval.cand.sourceStrokeIndices(),
                         eval.cand.strokes(),
                         eval.cand.bounds(),
                         CandidateState.UNKNOWN,
-                        new ArrayList<>()
+                        alts,
+                        reason
                     ));
                 }
             }
         }
         
-        return new SelectedSymbols(outSigils, outSigns, outUnknowns, selectedCandidates, calls);
+        return new SelectedSymbols(outSigils, outSigns, outUnknowns, selectedCandidates, calls, evaluated);
+    }
+    
+    /** Build alternatives list from a RecognitionResult, setting the role score. */
+    private static List<RecognitionAlternative> buildAlternatives(RasterRecognizer.RecognitionResult res, double roleScore, double rotationDeg) {
+        List<RecognitionAlternative> alts = new ArrayList<>();
+        for (RecognitionAlternative alt : res.alternatives) {
+            alts.add(new RecognitionAlternative(
+                alt.id(), alt.displayName(), alt.kind(),
+                alt.rawScore(), roleScore, alt.templateCoverage(),
+                alt.candidateExplainedRatio(), alt.unexplainedInkRatio(),
+                alt.structuralScore(), rotationDeg
+            ));
+        }
+        return alts;
+    }
+    
+    /** Merge alternatives from both sigil and sign recognition results. */
+    private static List<RecognitionAlternative> mergeAlternatives(EvaluatedCandidate eval) {
+        List<RecognitionAlternative> alts = new ArrayList<>();
+        if (eval.sigilRes != null) {
+            for (RecognitionAlternative alt : eval.sigilRes.alternatives) {
+                alts.add(new RecognitionAlternative(
+                    alt.id(), alt.displayName(), alt.kind(),
+                    alt.rawScore(), eval.sigilRoleScore, alt.templateCoverage(),
+                    alt.candidateExplainedRatio(), alt.unexplainedInkRatio(),
+                    alt.structuralScore(), 0
+                ));
+            }
+        }
+        if (eval.signRes != null) {
+            for (RecognitionAlternative alt : eval.signRes.alternatives) {
+                alts.add(new RecognitionAlternative(
+                    alt.id(), alt.displayName(), alt.kind(),
+                    alt.rawScore(), eval.signRoleScore, alt.templateCoverage(),
+                    alt.candidateExplainedRatio(), alt.unexplainedInkRatio(),
+                    alt.structuralScore(), eval.bestAngle
+                ));
+            }
+        }
+        // Sort by raw score descending and keep top 5
+        alts.sort((a, b) -> Double.compare(b.rawScore(), a.rawScore()));
+        if (alts.size() > 5) {
+            alts = new ArrayList<>(alts.subList(0, 5));
+        }
+        return alts;
+    }
+    
+    /** Determine the primary rejection reason from the best result. */
+    private static RecognitionRejectionReason determineRejectionReason(EvaluatedCandidate eval) {
+        // Use the better result's rejection reason
+        RasterRecognizer.RecognitionResult best = eval.sigilRoleScore >= eval.signRoleScore ? eval.sigilRes : eval.signRes;
+        if (best != null && best.rejectionReason != null) {
+            return best.rejectionReason;
+        }
+        return RecognitionRejectionReason.SCORE_BELOW_THRESHOLD;
     }
     
     private static double clamp(double v) {
@@ -160,13 +230,14 @@ public class SelectionEngine {
         return rotatedStrokes;
     }
     
-    private static class EvaluatedCandidate {
-        SymbolCandidate cand;
-        RasterRecognizer.RecognitionResult sigilRes;
-        double sigilRoleScore;
-        RasterRecognizer.RecognitionResult signRes;
-        double signRoleScore;
-        double bestAngle;
+    /** Diagnostic data for a single evaluated candidate. */
+    public static class EvaluatedCandidate {
+        public final SymbolCandidate cand;
+        public final RasterRecognizer.RecognitionResult sigilRes;
+        public final double sigilRoleScore;
+        public final RasterRecognizer.RecognitionResult signRes;
+        public final double signRoleScore;
+        public final double bestAngle;
         
         public EvaluatedCandidate(SymbolCandidate cand, RasterRecognizer.RecognitionResult sigilRes, double sigilRoleScore, RasterRecognizer.RecognitionResult signRes, double signRoleScore, double bestAngle) {
             this.cand = cand;
