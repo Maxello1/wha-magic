@@ -49,10 +49,22 @@ public class PointCloudRecognizer implements SymbolRecognizer {
     /** Minimum gap between best and second-best to avoid ambiguity. */
     private static final double MIN_GAP = 0.02;
 
+    /** Weight of turning angle in $P+ distance calculation. */
+    private static final double ANGLE_WEIGHT = 0.15;
+
     // ---- Data Structures ----
 
-    /** A point in a point cloud, with a stroke ID for resampling. */
-    public record CloudPoint(double x, double y, int strokeId) {}
+    /**
+     * A point in a point cloud, with stroke ID and $P+ turning angle.
+     * The turning angle measures local curvature: π for straight segments,
+     * 0 for sharp reversals, intermediate values for curves.
+     */
+    public record CloudPoint(double x, double y, int strokeId, double turningAngle) {
+        /** Create a point without turning angle (will be computed later). */
+        public CloudPoint(double x, double y, int strokeId) {
+            this(x, y, strokeId, Math.PI);
+        }
+    }
 
     /** A normalized point-cloud template. */
     public static class PointCloudTemplate {
@@ -366,7 +378,37 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         CloudPoint[] resampled = resamplePerStroke(strokeGroups, n);
         scale(resampled);
         translateToOrigin(resampled);
+        computeTurningAngles(resampled);
         return resampled;
+    }
+
+    /**
+     * Compute $P+ absolute turning angles for each point.
+     * The turning angle at point i is the absolute angle formed by
+     * points (i-1, i, i+1). Uses π (straight) as default for endpoints
+     * and stroke boundaries.
+     */
+    private static void computeTurningAngles(CloudPoint[] points) {
+        for (int i = 0; i < points.length; i++) {
+            double angle = Math.PI; // default: straight
+            if (i > 0 && i < points.length - 1
+                    && points[i-1].strokeId() == points[i].strokeId()
+                    && points[i].strokeId() == points[i+1].strokeId()) {
+                double ax = points[i].x() - points[i-1].x();
+                double ay = points[i].y() - points[i-1].y();
+                double bx = points[i+1].x() - points[i].x();
+                double by = points[i+1].y() - points[i].y();
+                double lenA = Math.sqrt(ax*ax + ay*ay);
+                double lenB = Math.sqrt(bx*bx + by*by);
+                if (lenA > 1e-10 && lenB > 1e-10) {
+                    double dot = (ax*bx + ay*by) / (lenA * lenB);
+                    dot = Math.max(-1.0, Math.min(1.0, dot)); // clamp for acos
+                    angle = Math.acos(dot); // 0 = sharp reversal, π = straight
+                }
+            }
+            // Use absolute angle (direction-invariant)
+            points[i] = new CloudPoint(points[i].x(), points[i].y(), points[i].strokeId(), angle);
+        }
     }
 
     /**
@@ -564,10 +606,18 @@ public class PointCloudRecognizer implements SymbolRecognizer {
 
     // ---- Utilities ----
 
+    /**
+     * $P+ distance: combines spatial distance with angular difference.
+     * Spatial distance measures position similarity.
+     * Angular difference measures curvature similarity.
+     */
     private static double dist(CloudPoint a, CloudPoint b) {
-        double dx = a.x - b.x;
-        double dy = a.y - b.y;
-        return Math.sqrt(dx * dx + dy * dy);
+        double dx = a.x() - b.x();
+        double dy = a.y() - b.y();
+        double spatialDist = Math.sqrt(dx * dx + dy * dy);
+        // Normalized angle difference: 0 when same curvature, 1 when maximally different
+        double angleDiff = Math.abs(a.turningAngle() - b.turningAngle()) / Math.PI;
+        return spatialDist + ANGLE_WEIGHT * angleDiff;
     }
 
     private static double pathLength(CloudPoint[] points) {
