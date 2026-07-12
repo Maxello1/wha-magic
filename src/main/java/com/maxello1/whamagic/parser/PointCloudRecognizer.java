@@ -30,7 +30,10 @@ import java.util.List;
  *   <li><b>Quality</b> — "How well did they draw it?" Feeds into spell power.</li>
  * </ol>
  */
-public class PointCloudRecognizer {
+public class PointCloudRecognizer implements SymbolRecognizer {
+
+    /** Singleton instance for use via the interface. */
+    public static final PointCloudRecognizer INSTANCE = new PointCloudRecognizer();
 
     private static final Logger LOGGER = LoggerFactory.getLogger(PointCloudRecognizer.class);
 
@@ -79,11 +82,35 @@ public class PointCloudRecognizer {
         }
     }
 
+    // ---- SymbolRecognizer interface ----
+
+    @Override public String name() { return "$P"; }
+
+    @Override public void clearTemplates() { templates.clear(); }
+
+    @Override
+    public void registerTemplate(String id, String displayName,
+                                 com.maxello1.whamagic.magic.SymbolKind kind, String element,
+                                 List<List<Point>> strokes,
+                                 com.maxello1.whamagic.magic.SigilSemantic sigilSemantic,
+                                 com.maxello1.whamagic.magic.SignSemantic signSemantic,
+                                 com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules) {
+        registerTemplateStatic(id, displayName, kind, element, strokes, sigilSemantic, signSemantic, recognitionRules);
+    }
+
+    @Override public int getTemplateCount() { return templates.size(); }
+
+    @Override
+    public RasterRecognizer.RecognitionResult recognize(List<List<Point>> strokes, com.maxello1.whamagic.magic.SymbolKind expectedKind) {
+        return recognizeStatic(strokes, expectedKind);
+    }
+
     // ---- Template Storage ----
 
     private static final List<PointCloudTemplate> templates = new ArrayList<>();
 
-    public static void clearTemplates() {
+    /** @deprecated Use instance methods via SymbolRecognizer interface instead. */
+    public static void clearTemplatesStatic() {
         templates.clear();
     }
 
@@ -91,7 +118,7 @@ public class PointCloudRecognizer {
      * Register a template from stroke data (as stored in sigils.json/signs.json).
      * The strokes are converted to a point cloud, resampled, and normalized.
      */
-    public static void registerTemplate(String id, String displayName,
+    public static void registerTemplateStatic(String id, String displayName,
                                         com.maxello1.whamagic.magic.SymbolKind kind, String element,
                                         List<List<Point>> strokes,
                                         com.maxello1.whamagic.magic.SigilSemantic sigilSemantic,
@@ -104,7 +131,7 @@ public class PointCloudRecognizer {
         LOGGER.debug("Registered $P template '{}' ({} strokes -> {} points)", id, strokes.size(), N);
     }
 
-    public static int getTemplateCount() {
+    public static int getTemplateCountStatic() {
         return templates.size();
     }
 
@@ -118,7 +145,7 @@ public class PointCloudRecognizer {
      * @param expectedKind  SIGIL or SIGN — only templates of this kind are tested
      * @return recognition result with match info and alternatives
      */
-    public static RasterRecognizer.RecognitionResult recognize(List<List<Point>> strokes,
+    public static RasterRecognizer.RecognitionResult recognizeStatic(List<List<Point>> strokes,
                                                                com.maxello1.whamagic.magic.SymbolKind expectedKind) {
         if (strokes == null || strokes.isEmpty()) {
             return new RasterRecognizer.RecognitionResult(false, null, "Unknown", null, null, 0,
