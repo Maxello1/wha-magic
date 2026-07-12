@@ -44,24 +44,26 @@ SOFTWARE.
 
 ---
 
-## $P Point-Cloud Recognizer
+## $P Point-Cloud Recognizer with $P+ Turning Angles
 
 The point-cloud gesture recognition algorithm in
 `src/main/java/com/maxello1/whamagic/parser/PointCloudRecognizer.java`
-is based on the $P recognizer by Vatavu, Anthony, and Wobbrock, and
-the $P+ extension by Vatavu.
+is a hybrid matcher combining $P's weighted one-to-one greedy cloud assignment
+with $P+-inspired absolute turning-angle distance. It is not a complete
+implementation of $P+'s one-to-many matching procedure.
 
+Based on:
 - $P: Radu-Daniel Vatavu, Lisa Anthony, Jacob O. Wobbrock.
   "Gestures as Point Clouds: A $P Recognizer for User Interface Prototypes."
   Proc. ICMI 2012.
 - $P+: Radu-Daniel Vatavu.
-  "$P+ Recognizer: An Efficient, Customizable, and Flexible Partial Stroke
-  Point-Cloud Recognizer." Proc. ICMI 2023.
+  "Improving Gesture Recognition Accuracy on Touch Screens for Users
+  with Low Vision." Proc. CHI 2017.
 - Reference implementation: https://depts.washington.edu/madlab/proj/dollar/pdollar.html
 
 ### New BSD License
 
-Copyright (c) 2012-2023, Radu-Daniel Vatavu, Lisa Anthony, Jacob O. Wobbrock.
+Copyright (c) 2012-2017, Radu-Daniel Vatavu, Lisa Anthony, Jacob O. Wobbrock.
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without

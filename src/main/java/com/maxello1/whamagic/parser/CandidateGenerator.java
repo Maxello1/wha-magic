@@ -31,10 +31,12 @@ public class CandidateGenerator {
         int n = primitives.size();
         
         // Insert the all-strokes super-candidate FIRST so it is always tested.
-        // For complex symbols like Light (12 strokes), the combinatorial explosion
-        // of smaller candidates would otherwise exhaust the recognition call budget.
+        // For complex symbols like Light (6+ strokes), the individual sub-candidates
+        // may extend beyond the ring's geometric validation bounds, but the combined
+        // drawing must still be tested as a single sigil.
         if (n > 1) {
-            SymbolCandidate allStrokesCandidate = buildCandidate(new ArrayList<>(primitives), ring, 0);
+            SymbolCandidate allStrokesCandidate = buildCandidate(new ArrayList<>(primitives), ring, 0)
+                    .withSuperCandidate();
             candidates.add(allStrokesCandidate);
         }
         

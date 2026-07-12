@@ -102,6 +102,8 @@ public class WitchHatMod implements ModInitializer {
                 net.minecraft.world.item.ItemStack newStack = stack.copy();
                 if (result.isValidSpell()) {
                     newStack.set(STORED_SPELL_COMPONENT, com.maxello1.whamagic.magic.StoredSpell.fromIr(result.ir, payload.strokes()));
+                } else {
+                    newStack.remove(STORED_SPELL_COMPONENT);
                 }
                 newStack.set(STROKES_COMPONENT, payload.strokes());
                 context.player().setItemInHand(usedHand, newStack);

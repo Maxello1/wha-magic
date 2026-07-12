@@ -1,9 +1,14 @@
 /*
- * $P Point-Cloud Recognizer with $P+ Turning Angles
+ * Hybrid $P / $P+ Point-Cloud Recognizer
+ *
+ * Uses $P's weighted one-to-one greedy cloud assignment combined with
+ * $P+-inspired absolute turning-angle distance. This is NOT a complete
+ * implementation of $P+'s one-to-many matching procedure.
  *
  * Based on:
  * - $P: Vatavu, Anthony, Wobbrock. "Gestures as Point Clouds." ICMI 2012.
- * - $P+: Vatavu. "$P+ Recognizer." ICMI 2023.
+ * - $P+: Vatavu. "Improving Gesture Recognition Accuracy on Touch Screens
+ *   for Users with Low Vision." CHI 2017.
  * Licensed under the New BSD License. See THIRD_PARTY_NOTICES.md.
  *
  * Ported to Java and extended for WHA Magic Minecraft mod.
@@ -58,13 +63,14 @@ public class PointCloudRecognizer implements SymbolRecognizer {
 
     /**
      * A point in a point cloud, with stroke ID and $P+ turning angle.
-     * The turning angle measures local curvature: π for straight segments,
-     * 0 for sharp reversals, intermediate values for curves.
+     * The turning angle measures local curvature:
+     * 0 = straight continuation (or endpoint/stroke boundary),
+     * π = complete reversal (sharpest possible turn).
      */
     public record CloudPoint(double x, double y, int strokeId, double turningAngle) {
         /** Create a point without turning angle (will be computed later). */
         public CloudPoint(double x, double y, int strokeId) {
-            this(x, y, strokeId, Math.PI);
+            this(x, y, strokeId, 0.0);
         }
     }
 
@@ -98,7 +104,7 @@ public class PointCloudRecognizer implements SymbolRecognizer {
 
     // ---- SymbolRecognizer interface ----
 
-    @Override public String name() { return "$P"; }
+    @Override public String name() { return "$P + curvature"; }
 
     @Override public void clearTemplates() { templates.clear(); }
 
@@ -387,12 +393,15 @@ public class PointCloudRecognizer implements SymbolRecognizer {
     /**
      * Compute $P+ absolute turning angles for each point.
      * The turning angle at point i is the absolute angle formed by
-     * points (i-1, i, i+1). Uses π (straight) as default for endpoints
-     * and stroke boundaries.
+     * points (i-1, i, i+1), computed as acos(dot product):
+     *   0 = straight continuation (collinear points)
+     *   π = complete reversal (180° turn)
+     * Endpoints and stroke boundaries receive 0.0 (straight continuation),
+     * as specified by the official $P+ pseudocode.
      */
     private static void computeTurningAngles(CloudPoint[] points) {
         for (int i = 0; i < points.length; i++) {
-            double angle = Math.PI; // default: straight
+            double angle = 0.0; // endpoint/stroke-boundary default: straight continuation
             if (i > 0 && i < points.length - 1
                     && points[i-1].strokeId() == points[i].strokeId()
                     && points[i].strokeId() == points[i+1].strokeId()) {
@@ -405,10 +414,10 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                 if (lenA > 1e-10 && lenB > 1e-10) {
                     double dot = (ax*bx + ay*by) / (lenA * lenB);
                     dot = Math.max(-1.0, Math.min(1.0, dot)); // clamp for acos
-                    angle = Math.acos(dot); // 0 = sharp reversal, π = straight
+                    angle = Math.acos(dot); // 0 = straight, π = reversal
                 }
             }
-            // Use absolute angle (direction-invariant)
+            // Absolute angle (direction-invariant)
             points[i] = new CloudPoint(points[i].x(), points[i].y(), points[i].strokeId(), angle);
         }
     }

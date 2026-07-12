@@ -1,0 +1,1 @@
+{"formatVersion": 2, "name": "neg_tiny_hook", "sampleRole": "negative", "expectedIntent": {"sigils": [], "signs": []}, "expectRing": false, "expectValidSpell": false, "notes": "", "strokes": [[{"x":0.48,"y":0.48},{"x":0.48,"y":0.49},{"x":0.48,"y":0.5},{"x":0.48,"y":0.51},{"x":0.48,"y":0.52},{"x":0.49,"y":0.52},{"x":0.5,"y":0.52},{"x":0.51,"y":0.52},{"x":0.52,"y":0.52}]]}

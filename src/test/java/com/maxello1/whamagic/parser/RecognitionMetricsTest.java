@@ -9,17 +9,17 @@ import com.maxello1.whamagic.magic.RecognitionRejectionReason;
 import com.maxello1.whamagic.parser.SelectionEngine.EvaluatedCandidate;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Disabled;
 
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumMap;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.*;
 public class RecognitionMetricsTest {
 
     private static final Gson GSON = new Gson();
+    private static final int MAX_RECOGNITION_CALLS = 512;
 
     @BeforeAll
     public static void setup() {
@@ -38,12 +39,15 @@ public class RecognitionMetricsTest {
 
     @Test
     public void produceRecognitionMetrics() throws Exception {
-        File dir = new File("src/test/resources/fixtures");
-        assertTrue(dir.exists() && dir.isDirectory(), "Fixtures directory must exist");
+        File fixturesRoot = new File("src/test/resources/fixtures");
+        assertTrue(fixturesRoot.exists() && fixturesRoot.isDirectory(), "Fixtures directory must exist");
 
-        File[] fixtureFiles = dir.listFiles((d, name) -> name.endsWith(".json"));
-        assertNotNull(fixtureFiles, "Fixture files must exist");
-        assertTrue(fixtureFiles.length > 0, "Must have at least one fixture");
+        // Discover fixtures from each category (sorted by name for deterministic ordering)
+        TreeMap<String, FixtureEntry> canonicalPositive = discoverFixtures(new File(fixturesRoot, "canonical/positive"), "canonical-positive");
+        TreeMap<String, FixtureEntry> canonicalNegative = discoverFixtures(new File(fixturesRoot, "canonical/negative"), "canonical-negative");
+        TreeMap<String, FixtureEntry> canonicalMulti = discoverFixtures(new File(fixturesRoot, "canonical/multi"), "canonical-multi");
+        TreeMap<String, FixtureEntry> holdoutPositive = discoverFixtures(new File(fixturesRoot, "holdout/positive"), "holdout-positive");
+        TreeMap<String, FixtureEntry> holdoutNegative = discoverFixtures(new File(fixturesRoot, "holdout/negative"), "holdout-negative");
 
         int totalPositive = 0;
         int totalNegative = 0;
@@ -74,25 +78,30 @@ public class RecognitionMetricsTest {
 
         report.append("=== Recognition Metrics Report ===\n\n");
 
-        for (File file : fixtureFiles) {
-            JsonObject fixture = GSON.fromJson(new FileReader(file), JsonObject.class);
-            String expectedSpell = fixture.get("expectedSpell").getAsString();
-            boolean isPositive = !expectedSpell.isEmpty();
+        // --- Canonical positive assertions ---
+        List<String> canonicalPositiveFailures = new ArrayList<>();
+        List<String> deterministicFailures = new ArrayList<>();
 
-            // Parse strokes
-            List<List<Point>> strokes = new ArrayList<>();
-            JsonArray strokesArr = fixture.getAsJsonArray("strokes");
-            for (JsonElement strokeElem : strokesArr) {
-                List<Point> stroke = new ArrayList<>();
-                for (JsonElement pointElem : strokeElem.getAsJsonArray()) {
-                    JsonObject pt = pointElem.getAsJsonObject();
-                    stroke.add(new Point(pt.get("x").getAsDouble(), pt.get("y").getAsDouble()));
-                }
-                strokes.add(stroke);
+        for (Map.Entry<String, FixtureEntry> entry : canonicalPositive.entrySet()) {
+            FixtureEntry fe = entry.getValue();
+            JsonObject fixture = fe.fixture;
+            File file = fe.file;
+
+            List<String> expectedSigils = getExpectedSigils(fixture);
+            List<String> expectedSigns = getExpectedSigns(fixture);
+            boolean isPositive = !expectedSigils.isEmpty() || !expectedSigns.isEmpty();
+
+            List<List<Point>> strokes = parseStrokes(fixture);
+            SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+            // Determinism check: run again and verify identical results
+            SpellParser.ParseResult result2 = SpellParser.parse(strokes);
+            List<String> ids1 = getRecognizedIds(result);
+            List<String> ids2 = getRecognizedIds(result2);
+            if (!multisetEquals(ids1, ids2)) {
+                deterministicFailures.add(file.getName() + ": run1=" + ids1 + " run2=" + ids2);
             }
 
-            SpellParser.ParseResult result = SpellParser.parse(strokes);
-            
             // Log ring detection for debugging
             if (result.ast != null && result.ast.ring() != null) {
                 var ring = result.ast.ring();
@@ -106,52 +115,36 @@ public class RecognitionMetricsTest {
                 maxRecognitionCalls = Math.max(maxRecognitionCalls, result.debugResult.recognitionCalls());
             }
 
-            // Get actual recognized IDs
-            List<String> recognizedIds = new ArrayList<>();
-            if (result.ast != null && result.ast.sigils() != null) {
-                for (var sigil : result.ast.sigils()) {
-                    if (sigil.id() != null) {
-                        recognizedIds.add(sigil.id().getPath());
-                    }
-                }
-            }
-            if (result.ast != null && result.ast.signs() != null) {
-                for (var sign : result.ast.signs()) {
-                    recognizedIds.add(sign.id());
-                }
-            }
+            List<String> recognizedSigils = getRecognizedSigils(result);
+            List<String> recognizedSigns = getRecognizedSigns(result);
+            List<String> recognizedIds = getRecognizedIds(result);
 
             // Get top-3 alternative IDs from all sources
-            List<String> top3Ids = new ArrayList<>();
-            if (result.debugResult != null && result.debugResult.allEvaluated() != null) {
-                for (var eval : result.debugResult.allEvaluated()) {
-                    if (eval.sigilRes != null && eval.sigilRes.alternatives != null) {
-                        for (int i = 0; i < Math.min(3, eval.sigilRes.alternatives.size()); i++) {
-                            var alt = eval.sigilRes.alternatives.get(i);
-                            if (alt.id() != null) {
-                                top3Ids.add(alt.id().getPath());
-                            }
-                        }
-                    }
-                    if (eval.signRes != null && eval.signRes.alternatives != null) {
-                        for (int i = 0; i < Math.min(3, eval.signRes.alternatives.size()); i++) {
-                            var alt = eval.signRes.alternatives.get(i);
-                            if (alt.id() != null) {
-                                top3Ids.add(alt.id().getPath());
-                            }
-                        }
-                    }
-                }
-            }
+            List<String> top3Ids = getTop3Ids(result);
 
+            String expectedLabel = formatExpected(expectedSigils, expectedSigns);
             report.append(String.format("%-35s expected=%-20s recognized=%-30s\n",
-                    file.getName(), expectedSpell.isEmpty() ? "(none)" : expectedSpell,
+                    file.getName(), expectedLabel.isEmpty() ? "(none)" : expectedLabel,
                     recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds)));
 
             if (isPositive) {
                 totalPositive++;
-                boolean top1Match = recognizedIds.contains(expectedSpell);
-                boolean top3Match = top1Match || top3Ids.contains(expectedSpell);
+
+                // Check sigils and signs separately as multisets
+                boolean sigilMatch = multisetEquals(recognizedSigils, expectedSigils);
+                boolean signMatch = multisetEquals(recognizedSigns, expectedSigns);
+                boolean top1Match = sigilMatch && signMatch;
+
+                // Check top-3 fallback (any expected in top-3 alternatives)
+                boolean top3Match = top1Match;
+                if (!top1Match) {
+                    for (String s : expectedSigils) {
+                        if (top3Ids.contains(s)) { top3Match = true; break; }
+                    }
+                    for (String s : expectedSigns) {
+                        if (top3Ids.contains(s)) { top3Match = true; break; }
+                    }
+                }
 
                 if (top1Match) {
                     top1Correct++;
@@ -165,29 +158,34 @@ public class RecognitionMetricsTest {
                             }
                         }
                     }
+                } else {
+                    canonicalPositiveFailures.add(file.getName()
+                            + ": expected_sigils=" + expectedSigils + " expected_signs=" + expectedSigns
+                            + " got_sigils=" + recognizedSigils + " got_signs=" + recognizedSigns);
                 }
                 if (top3Match) top3Correct++;
 
                 if (!top1Match) {
-                    String actual = recognizedIds.isEmpty() ? "(rejected)" : recognizedIds.get(0);
                     if (recognizedIds.isEmpty()) {
                         falseRejections++;
-                        falseRejectionDetails.add(file.getName() + ": expected=" + expectedSpell);
+                        falseRejectionDetails.add(file.getName() + ": expected=" + expectedLabel);
                     } else {
-                        confusionPairs.add(file.getName() + ": expected=" + expectedSpell + " got=" + actual);
+                        String actual = recognizedIds.get(0);
+                        confusionPairs.add(file.getName() + ": expected=" + expectedLabel + " got=" + actual);
                     }
                 }
 
                 // Per-symbol tracking
-                perSymbolCounts.computeIfAbsent(expectedSpell, k -> new int[]{0, 0});
-                perSymbolCounts.get(expectedSpell)[0]++;
+                String symbolName = expectedLabel;
+                perSymbolCounts.computeIfAbsent(symbolName, k -> new int[]{0, 0});
+                perSymbolCounts.get(symbolName)[0]++;
                 if (top1Match) {
-                    perSymbolCounts.get(expectedSpell)[1]++;
+                    perSymbolCounts.get(symbolName)[1]++;
                 }
 
-                // === Per-fixture diagnostic block for POSITIVE fixtures ===
-                appendFixtureDiagnostics(detailReport, file.getName(), expectedSpell,
-                        recognizedIds.contains(expectedSpell), result, rejectionCounts, perSymbolRejection, expectedSpell);
+                // Per-fixture diagnostic block for POSITIVE fixtures
+                appendFixtureDiagnostics(detailReport, file.getName(), expectedLabel,
+                        top1Match, result, rejectionCounts, perSymbolRejection, symbolName);
             } else {
                 totalNegative++;
                 if (!recognizedIds.isEmpty()) {
@@ -197,17 +195,166 @@ public class RecognitionMetricsTest {
             }
         }
 
+        // --- Canonical negative assertions ---
+        List<String> canonicalNegativeFailures = new ArrayList<>();
+
+        for (Map.Entry<String, FixtureEntry> entry : canonicalNegative.entrySet()) {
+            FixtureEntry fe = entry.getValue();
+            JsonObject fixture = fe.fixture;
+            File file = fe.file;
+
+            List<List<Point>> strokes = parseStrokes(fixture);
+            SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+            // Determinism check
+            SpellParser.ParseResult result2 = SpellParser.parse(strokes);
+            List<String> ids1 = getRecognizedIds(result);
+            List<String> ids2 = getRecognizedIds(result2);
+            if (!multisetEquals(ids1, ids2)) {
+                deterministicFailures.add(file.getName() + ": run1=" + ids1 + " run2=" + ids2);
+            }
+
+            // Track limits
+            if (result.debugResult != null) {
+                maxCandidates = Math.max(maxCandidates, result.debugResult.candidateCount());
+                maxRecognitionCalls = Math.max(maxRecognitionCalls, result.debugResult.recognitionCalls());
+            }
+
+            List<String> recognizedIds = getRecognizedIds(result);
+
+            totalNegative++;
+            report.append(String.format("%-35s expected=%-20s recognized=%-30s\n",
+                    file.getName(), "(none)",
+                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds)));
+
+            if (!recognizedIds.isEmpty()) {
+                falsePositives++;
+                falsePositiveDetails.add(file.getName() + ": got=" + String.join(", ", recognizedIds));
+                canonicalNegativeFailures.add(file.getName() + ": got=" + String.join(", ", recognizedIds));
+            }
+        }
+
+        // --- Canonical multi assertions ---
+        List<String> canonicalMultiFailures = new ArrayList<>();
+
+        for (Map.Entry<String, FixtureEntry> entry : canonicalMulti.entrySet()) {
+            FixtureEntry fe = entry.getValue();
+            JsonObject fixture = fe.fixture;
+            File file = fe.file;
+
+            List<String> expectedSigils = getExpectedSigils(fixture);
+            List<String> expectedSigns = getExpectedSigns(fixture);
+
+            List<List<Point>> strokes = parseStrokes(fixture);
+            SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+            // Determinism check
+            SpellParser.ParseResult result2 = SpellParser.parse(strokes);
+            List<String> ids1 = getRecognizedIds(result);
+            List<String> ids2 = getRecognizedIds(result2);
+            if (!multisetEquals(ids1, ids2)) {
+                deterministicFailures.add(file.getName() + ": run1=" + ids1 + " run2=" + ids2);
+            }
+
+            // Track limits
+            if (result.debugResult != null) {
+                maxCandidates = Math.max(maxCandidates, result.debugResult.candidateCount());
+                maxRecognitionCalls = Math.max(maxRecognitionCalls, result.debugResult.recognitionCalls());
+            }
+
+            List<String> recognizedSigils = getRecognizedSigils(result);
+            List<String> recognizedSigns = getRecognizedSigns(result);
+
+            boolean sigilMatch = multisetEquals(recognizedSigils, expectedSigils);
+            boolean signMatch = multisetEquals(recognizedSigns, expectedSigns);
+
+            String expectedLabel = formatExpected(expectedSigils, expectedSigns);
+            List<String> recognizedIds = getRecognizedIds(result);
+            report.append(String.format("%-35s expected=%-20s recognized=%-30s\n",
+                    file.getName(), expectedLabel.isEmpty() ? "(none)" : expectedLabel,
+                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds)));
+
+            if (!sigilMatch || !signMatch) {
+                canonicalMultiFailures.add(file.getName()
+                        + ": expected_sigils=" + expectedSigils + " expected_signs=" + expectedSigns
+                        + " got_sigils=" + recognizedSigils + " got_signs=" + recognizedSigns);
+            } else {
+                totalPositive++;
+                top1Correct++;
+                top3Correct++;
+            }
+        }
+
+        // --- Holdout fixtures (report only, don't fail) ---
+        int holdoutTotal = 0;
+        int holdoutCorrect = 0;
+
+        for (Map.Entry<String, FixtureEntry> entry : holdoutPositive.entrySet()) {
+            FixtureEntry fe = entry.getValue();
+            JsonObject fixture = fe.fixture;
+            File file = fe.file;
+
+            List<String> expectedSigils = getExpectedSigils(fixture);
+            List<String> expectedSigns = getExpectedSigns(fixture);
+
+            List<List<Point>> strokes = parseStrokes(fixture);
+            SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+            // Track limits
+            if (result.debugResult != null) {
+                maxCandidates = Math.max(maxCandidates, result.debugResult.candidateCount());
+                maxRecognitionCalls = Math.max(maxRecognitionCalls, result.debugResult.recognitionCalls());
+            }
+
+            List<String> recognizedSigils = getRecognizedSigils(result);
+            List<String> recognizedSigns = getRecognizedSigns(result);
+            List<String> recognizedIds = getRecognizedIds(result);
+
+            holdoutTotal++;
+            boolean match = multisetEquals(recognizedSigils, expectedSigils) && multisetEquals(recognizedSigns, expectedSigns);
+            if (match) holdoutCorrect++;
+
+            String expectedLabel = formatExpected(expectedSigils, expectedSigns);
+            report.append(String.format("%-35s expected=%-20s recognized=%-30s [holdout]\n",
+                    file.getName(), expectedLabel.isEmpty() ? "(none)" : expectedLabel,
+                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds)));
+        }
+
+        for (Map.Entry<String, FixtureEntry> entry : holdoutNegative.entrySet()) {
+            FixtureEntry fe = entry.getValue();
+            JsonObject fixture = fe.fixture;
+            File file = fe.file;
+
+            List<List<Point>> strokes = parseStrokes(fixture);
+            SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+            // Track limits
+            if (result.debugResult != null) {
+                maxCandidates = Math.max(maxCandidates, result.debugResult.candidateCount());
+                maxRecognitionCalls = Math.max(maxRecognitionCalls, result.debugResult.recognitionCalls());
+            }
+
+            List<String> recognizedIds = getRecognizedIds(result);
+
+            holdoutTotal++;
+            if (recognizedIds.isEmpty()) holdoutCorrect++;
+
+            report.append(String.format("%-35s expected=%-20s recognized=%-30s [holdout]\n",
+                    file.getName(), "(none)",
+                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds)));
+        }
+
         // Summary
         report.append("\n=== Summary ===\n");
-        report.append(String.format("Total fixtures:      %d (positive: %d, negative: %d)\n", 
+        report.append(String.format("Total fixtures:      %d (positive: %d, negative: %d)\n",
                 totalPositive + totalNegative, totalPositive, totalNegative));
-        report.append(String.format("Top-1 accuracy:      %d/%d (%.1f%%)\n", 
+        report.append(String.format("Top-1 accuracy:      %d/%d (%.1f%%)\n",
                 top1Correct, totalPositive, totalPositive > 0 ? 100.0 * top1Correct / totalPositive : 0));
-        report.append(String.format("Top-3 accuracy:      %d/%d (%.1f%%)\n", 
+        report.append(String.format("Top-3 accuracy:      %d/%d (%.1f%%)\n",
                 top3Correct, totalPositive, totalPositive > 0 ? 100.0 * top3Correct / totalPositive : 0));
         report.append(String.format("False positives:     %d/%d\n", falsePositives, totalNegative));
         report.append(String.format("False rejections:    %d/%d\n", falseRejections, totalPositive));
-        report.append(String.format("Avg confidence gap:  %.3f\n", 
+        report.append(String.format("Avg confidence gap:  %.3f\n",
                 confidenceGapCount > 0 ? totalConfidenceGap / confidenceGapCount : 0));
         report.append(String.format("Max candidates:      %d\n", maxCandidates));
         report.append(String.format("Max recognition calls: %d\n", maxRecognitionCalls));
@@ -251,6 +398,15 @@ public class RecognitionMetricsTest {
             report.append(String.format("  %-30s %d\n", entry.getKey() + ":", entry.getValue()));
         }
 
+        // Holdout results
+        report.append("\n=== HOLDOUT RESULTS ===\n");
+        if (holdoutTotal > 0) {
+            report.append(String.format("holdout accuracy: %d/%d (%.0f%%)\n", holdoutCorrect, holdoutTotal,
+                    100.0 * holdoutCorrect / holdoutTotal));
+        } else {
+            report.append("holdout accuracy: 0/0 (no holdout fixtures)\n");
+        }
+
         // Append per-fixture detail diagnostics
         report.append("\n");
         report.append(detailReport);
@@ -264,9 +420,193 @@ public class RecognitionMetricsTest {
 
         System.out.println(report);
 
-        // The test itself passes — it produces the report.
-        // Specific accuracy thresholds are not enforced in Phase 1.
+        // Print holdout results prominently to stdout
+        System.out.println("\n=== HOLDOUT RESULTS ===");
+        if (holdoutTotal > 0) {
+            System.out.printf("holdout accuracy: %d/%d (%.0f%%)%n", holdoutCorrect, holdoutTotal,
+                    100.0 * holdoutCorrect / holdoutTotal);
+        } else {
+            System.out.println("holdout accuracy: 0/0 (no holdout fixtures)");
+        }
+
+        // === HARD ASSERTIONS ===
+
+        // 1. Determinism: all results must be identical across runs
+        assertTrue(deterministicFailures.isEmpty(),
+                "Recognition must be deterministic. Failures:\n  " + String.join("\n  ", deterministicFailures));
+
+        // 2. Canonical positive: 100% must be recognised correctly
+        assertTrue(canonicalPositiveFailures.isEmpty(),
+                "All canonical positive fixtures must be recognised correctly. Failures:\n  "
+                        + String.join("\n  ", canonicalPositiveFailures));
+
+        // 3. Canonical negative: 0 false positives
+        assertTrue(canonicalNegativeFailures.isEmpty(),
+                "No canonical negative fixtures should be recognised as any symbol. Failures:\n  "
+                        + String.join("\n  ", canonicalNegativeFailures));
+
+        // 4. Canonical multi: 100% match IDs and multiplicity
+        assertTrue(canonicalMultiFailures.isEmpty(),
+                "All canonical multi-symbol fixtures must match IDs and multiplicity. Failures:\n  "
+                        + String.join("\n  ", canonicalMultiFailures));
+
+        // 5. Recognition calls must not exceed configured maximum
+        assertTrue(maxRecognitionCalls <= MAX_RECOGNITION_CALLS,
+                "Max recognition calls " + maxRecognitionCalls + " exceeds limit of " + MAX_RECOGNITION_CALLS);
     }
+
+    // ---- Fixture discovery ----
+
+    private TreeMap<String, FixtureEntry> discoverFixtures(File dir, String category) throws Exception {
+        TreeMap<String, FixtureEntry> fixtures = new TreeMap<>();
+        if (!dir.exists() || !dir.isDirectory()) {
+            return fixtures;
+        }
+        collectFixturesRecursive(dir, fixtures);
+        return fixtures;
+    }
+
+    private void collectFixturesRecursive(File dir, TreeMap<String, FixtureEntry> fixtures) throws Exception {
+        File[] children = dir.listFiles();
+        if (children == null) return;
+        for (File child : children) {
+            if (child.isDirectory()) {
+                collectFixturesRecursive(child, fixtures);
+            } else if (child.getName().endsWith(".json")) {
+                JsonObject fixture = GSON.fromJson(new FileReader(child), JsonObject.class);
+                fixtures.put(child.getName(), new FixtureEntry(child, fixture));
+            }
+        }
+    }
+
+    // ---- Fixture schema parsing ----
+
+    private List<String> getExpectedSigils(JsonObject fixture) {
+        if (fixture.has("expectedIntent")) {
+            JsonObject intent = fixture.getAsJsonObject("expectedIntent");
+            List<String> sigils = new ArrayList<>();
+            if (intent.has("sigils")) {
+                for (JsonElement e : intent.getAsJsonArray("sigils")) {
+                    sigils.add(e.getAsString());
+                }
+            }
+            return sigils;
+        }
+        // Legacy fallback
+        String spell = fixture.get("expectedSpell").getAsString();
+        if (spell.isEmpty()) return List.of();
+        return List.of(spell);
+    }
+
+    private List<String> getExpectedSigns(JsonObject fixture) {
+        if (fixture.has("expectedIntent")) {
+            JsonObject intent = fixture.getAsJsonObject("expectedIntent");
+            List<String> signs = new ArrayList<>();
+            if (intent.has("signs")) {
+                for (JsonElement e : intent.getAsJsonArray("signs")) {
+                    signs.add(e.getAsString());
+                }
+            }
+            return signs;
+        }
+        // Legacy: no sign info available
+        return List.of();
+    }
+
+    // ---- Stroke parsing ----
+
+    private List<List<Point>> parseStrokes(JsonObject fixture) {
+        List<List<Point>> strokes = new ArrayList<>();
+        JsonArray strokesArr = fixture.getAsJsonArray("strokes");
+        for (JsonElement strokeElem : strokesArr) {
+            List<Point> stroke = new ArrayList<>();
+            for (JsonElement pointElem : strokeElem.getAsJsonArray()) {
+                JsonObject pt = pointElem.getAsJsonObject();
+                stroke.add(new Point(pt.get("x").getAsDouble(), pt.get("y").getAsDouble()));
+            }
+            strokes.add(stroke);
+        }
+        return strokes;
+    }
+
+    // ---- Result extraction ----
+
+    private List<String> getRecognizedSigils(SpellParser.ParseResult result) {
+        List<String> ids = new ArrayList<>();
+        if (result.ast != null && result.ast.sigils() != null) {
+            for (var sigil : result.ast.sigils()) {
+                if (sigil.id() != null) {
+                    ids.add(sigil.id().getPath());
+                }
+            }
+        }
+        return ids;
+    }
+
+    private List<String> getRecognizedSigns(SpellParser.ParseResult result) {
+        List<String> ids = new ArrayList<>();
+        if (result.ast != null && result.ast.signs() != null) {
+            for (var sign : result.ast.signs()) {
+                ids.add(sign.id());
+            }
+        }
+        return ids;
+    }
+
+    private List<String> getRecognizedIds(SpellParser.ParseResult result) {
+        List<String> ids = new ArrayList<>();
+        ids.addAll(getRecognizedSigils(result));
+        ids.addAll(getRecognizedSigns(result));
+        return ids;
+    }
+
+    private List<String> getTop3Ids(SpellParser.ParseResult result) {
+        List<String> top3Ids = new ArrayList<>();
+        if (result.debugResult != null && result.debugResult.allEvaluated() != null) {
+            for (var eval : result.debugResult.allEvaluated()) {
+                if (eval.sigilRes != null && eval.sigilRes.alternatives != null) {
+                    for (int i = 0; i < Math.min(3, eval.sigilRes.alternatives.size()); i++) {
+                        var alt = eval.sigilRes.alternatives.get(i);
+                        if (alt.id() != null) {
+                            top3Ids.add(alt.id().getPath());
+                        }
+                    }
+                }
+                if (eval.signRes != null && eval.signRes.alternatives != null) {
+                    for (int i = 0; i < Math.min(3, eval.signRes.alternatives.size()); i++) {
+                        var alt = eval.signRes.alternatives.get(i);
+                        if (alt.id() != null) {
+                            top3Ids.add(alt.id().getPath());
+                        }
+                    }
+                }
+            }
+        }
+        return top3Ids;
+    }
+
+    // ---- Multiset comparison ----
+
+    private boolean multisetEquals(List<String> a, List<String> b) {
+        List<String> sortedA = new ArrayList<>(a);
+        List<String> sortedB = new ArrayList<>(b);
+        Collections.sort(sortedA);
+        Collections.sort(sortedB);
+        return sortedA.equals(sortedB);
+    }
+
+    // ---- Formatting helpers ----
+
+    private String formatExpected(List<String> sigils, List<String> signs) {
+        List<String> all = new ArrayList<>();
+        all.addAll(sigils);
+        all.addAll(signs);
+        return String.join(", ", all);
+    }
+
+    // ---- Data types ----
+
+    private record FixtureEntry(File file, JsonObject fixture) {}
 
     /**
      * Append detailed diagnostic information for a single positive fixture.
@@ -286,13 +626,6 @@ public class RecognitionMetricsTest {
         List<EvaluatedCandidate> allEval = result.debugResult.allEvaluated();
         int candidatesEvaluated = allEval.size();
 
-        // Find the best alternative across all evaluated candidates (sigil + sign)
-        RecognitionAlternative bestAlt = null;
-        RecognitionAlternative secondBestAlt = null;
-        RasterRecognizer.RecognitionResult bestRes = null;
-        EvaluatedCandidate bestEvalCand = null;
-        String bestKind = "UNKNOWN";
-
         // Collect all alternatives from all candidates for global best/second-best
         List<AlternativeWithContext> allAlts = new ArrayList<>();
         for (EvaluatedCandidate eval : allEval) {
@@ -310,6 +643,12 @@ public class RecognitionMetricsTest {
 
         // Sort by raw score descending
         allAlts.sort((a, b) -> Double.compare(b.alt.rawScore(), a.alt.rawScore()));
+
+        RecognitionAlternative bestAlt = null;
+        RecognitionAlternative secondBestAlt = null;
+        RasterRecognizer.RecognitionResult bestRes = null;
+        EvaluatedCandidate bestEvalCand = null;
+        String bestKind = "UNKNOWN";
 
         if (!allAlts.isEmpty()) {
             AlternativeWithContext bestCtx = allAlts.get(0);
@@ -365,7 +704,7 @@ public class RecognitionMetricsTest {
         out.append(String.format("    Source strokes:    %s\n", sourceStrokes));
         out.append(String.format("    Candidate ID:      %d\n", candidateId));
         out.append(String.format("    Candidates evaluated: %d\n", candidatesEvaluated));
-        
+
         // Show expected symbol's best score across all candidates
         double expectedBestScore = 0;
         String expectedBestKind = "N/A";

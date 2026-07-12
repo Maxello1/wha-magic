@@ -53,12 +53,21 @@ public class SpellParserTest {
         if (!dir.exists() || !dir.isDirectory()) {
             return Stream.empty();
         }
-        
-        File[] files = dir.listFiles((d, name) -> name.endsWith(".json"));
-        if (files == null) {
-            return Stream.empty();
+        List<File> allFixtures = new ArrayList<>();
+        collectFixturesRecursive(dir, allFixtures);
+        return allFixtures.stream().sorted();
+    }
+
+    private static void collectFixturesRecursive(File dir, List<File> result) {
+        File[] children = dir.listFiles();
+        if (children == null) return;
+        for (File child : children) {
+            if (child.isDirectory()) {
+                collectFixturesRecursive(child, result);
+            } else if (child.getName().endsWith(".json")) {
+                result.add(child);
+            }
         }
-        return Stream.of(files);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -67,8 +76,19 @@ public class SpellParserTest {
     public void testFixture(File file) throws Exception {
         JsonObject json = GSON.fromJson(new FileReader(file), JsonObject.class);
         JsonArray strokesArray = json.getAsJsonArray("strokes");
-        String expectedSpell = json.get("expectedSpell").getAsString();
-        
+
+        // Support both formatVersion 2 (expectedIntent) and legacy (expectedSpell)
+        boolean isPositive;
+        if (json.has("expectedIntent")) {
+            JsonObject intent = json.getAsJsonObject("expectedIntent");
+            boolean hasSigils = intent.has("sigils") && intent.getAsJsonArray("sigils").size() > 0;
+            boolean hasSigns = intent.has("signs") && intent.getAsJsonArray("signs").size() > 0;
+            isPositive = hasSigils || hasSigns;
+        } else {
+            String expectedSpell = json.get("expectedSpell").getAsString();
+            isPositive = !expectedSpell.isEmpty();
+        }
+
         List<List<Point>> strokes = new ArrayList<>();
         for (JsonElement strokeElem : strokesArray) {
             JsonArray pointsArray = strokeElem.getAsJsonArray();
@@ -79,16 +99,13 @@ public class SpellParserTest {
             }
             strokes.add(strokePoints);
         }
-        
+
         SpellParser.ParseResult result = SpellParser.parse(strokes);
         assertNotNull(result, "Parse result must not be null");
         assertNotNull(result.debugResult, "Debug result must be populated");
-        
-        if (expectedSpell.isEmpty()) {
-            // Negative fixture: no sigils or signs should be recognized
-            // (Some negative fixtures like water false-positive may still produce false matches —
-            //  those are documented for Phase 2 and tracked by RecognitionMetricsTest)
-            // We just verify the parse completes without error and produces debug data
+
+        if (!isPositive) {
+            // Negative fixture: we just verify the parse completes without error and produces debug data
             assertTrue(result.debugResult.recognitionCalls() >= 0, "Recognition calls should be tracked");
         } else {
             // Positive fixture: verify recognition produces diagnostic data.
@@ -96,7 +113,7 @@ public class SpellParserTest {
             // so we check that the recognizer ran and produced alternatives.
             assertTrue(result.debugResult.candidateCount() >= 0, "Candidates should be tracked");
             assertTrue(result.debugResult.recognitionCalls() >= 0, "Recognition calls should be tracked");
-            
+
             // Check that alternatives are populated when candidates exist
             if (result.debugResult.allEvaluated() != null && !result.debugResult.allEvaluated().isEmpty()) {
                 var firstEval = result.debugResult.allEvaluated().get(0);

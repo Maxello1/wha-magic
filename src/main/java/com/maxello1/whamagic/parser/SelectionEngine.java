@@ -13,11 +13,15 @@ import com.maxello1.whamagic.magic.RingDetector;
 import net.minecraft.resources.Identifier;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.HashSet;
 import java.util.Set;
 
 public class SelectionEngine {
+    
+    /** Minimum margin by which a super-candidate must beat sub-candidates to be preferred. */
+    static final double SUPER_CANDIDATE_WIN_MARGIN = 0.05;
     
     public record SelectedSymbols(
         List<RecognizedSigil> sigils,
@@ -103,15 +107,48 @@ public class SelectionEngine {
             evaluated.add(new EvaluatedCandidate(cand, sigilRes, sigilRoleScore, bestSignRes, signRoleScore, bestAngle));
         }
         
-        evaluated.sort((a, b) -> {
-            // Primary: best role score. Tiebreaker: prefer candidates using more strokes
-            // (they explain more of the drawing and reduce spurious subset matches).
-            double scoreA = Math.max(a.sigilRoleScore, a.signRoleScore)
-                    + a.cand.sourceStrokeIndices().size() * 0.02;
-            double scoreB = Math.max(b.sigilRoleScore, b.signRoleScore)
-                    + b.cand.sourceStrokeIndices().size() * 0.02;
-            return Double.compare(scoreB, scoreA);
-        });
+        // Deterministic multi-level comparator: role score → raw score → stroke coverage → symbol ID → candidate ID
+        Comparator<EvaluatedCandidate> byScore = (a, b) -> {
+            double roleA = Math.max(a.sigilRoleScore, a.signRoleScore);
+            double roleB = Math.max(b.sigilRoleScore, b.signRoleScore);
+            int cmp = Double.compare(roleB, roleA);
+            if (cmp != 0) return cmp;
+            // Higher raw recognition confidence
+            double rawA = Math.max(a.sigilRes != null ? a.sigilRes.score : 0, a.signRes != null ? a.signRes.score : 0);
+            double rawB = Math.max(b.sigilRes != null ? b.sigilRes.score : 0, b.signRes != null ? b.signRes.score : 0);
+            cmp = Double.compare(rawB, rawA);
+            if (cmp != 0) return cmp;
+            // Greater explained-stroke coverage (more strokes)
+            cmp = Integer.compare(b.cand.sourceStrokeIndices().size(), a.cand.sourceStrokeIndices().size());
+            if (cmp != 0) return cmp;
+            // Symbol ID lexicographically
+            String idA = bestId(a);
+            String idB = bestId(b);
+            cmp = idA.compareTo(idB);
+            if (cmp != 0) return cmp;
+            // Candidate ID
+            return Integer.compare(a.cand.id(), b.cand.id());
+        };
+        evaluated.sort(byScore);
+        
+        // Classify candidates into categories
+        List<EvaluatedCandidate> recognised = new ArrayList<>();
+        List<EvaluatedCandidate> ambiguous = new ArrayList<>();
+        List<EvaluatedCandidate> unknown = new ArrayList<>();
+        List<EvaluatedCandidate> noise = new ArrayList<>();
+        
+        for (EvaluatedCandidate eval : evaluated) {
+            RasterRecognizer.RecognitionResult bestRes = pickBestResult(eval);
+            if (bestRes != null && bestRes.rejectionReason == RecognitionRejectionReason.NOISE_DISCARDED) {
+                noise.add(eval);
+            } else if (bestRes != null && bestRes.recognized && bestRes.confidenceGap >= 0.05) {
+                recognised.add(eval);
+            } else if (bestRes != null && bestRes.recognized) {
+                ambiguous.add(eval);
+            } else {
+                unknown.add(eval);
+            }
+        }
         
         Set<Integer> usedStrokes = new HashSet<>();
         List<RecognizedSigil> outSigils = new ArrayList<>();
@@ -119,7 +156,68 @@ public class SelectionEngine {
         List<UnknownSymbol> outUnknowns = new ArrayList<>();
         List<SymbolCandidate> selectedCandidates = new ArrayList<>();
         
-        for (EvaluatedCandidate eval : evaluated) {
+        // --- Super-candidate comparison ---
+        // If a recognised super-candidate exists, compare it against the combined
+        // non-overlapping recognised sub-candidates. Only prefer the super-candidate
+        // if it wins by SUPER_CANDIDATE_WIN_MARGIN.
+        EvaluatedCandidate superEval = null;
+        List<EvaluatedCandidate> subRecognised = new ArrayList<>();
+        for (EvaluatedCandidate eval : recognised) {
+            if (eval.cand.isSuperCandidate()) {
+                superEval = eval;
+            } else {
+                subRecognised.add(eval);
+            }
+        }
+        
+        boolean preferSuper = false;
+        if (superEval != null) {
+            RasterRecognizer.RecognitionResult superRes = pickBestResult(superEval);
+            double superScore = superRes != null ? Math.max(superEval.sigilRoleScore, superEval.signRoleScore) : 0;
+            
+            // Collect non-overlapping sub-candidates and compute weighted average
+            Set<Integer> subUsed = new HashSet<>();
+            double subScoreSum = 0;
+            int subStrokeCount = 0;
+            for (EvaluatedCandidate sub : subRecognised) {
+                boolean overlap = false;
+                for (int idx : sub.cand.sourceStrokeIndices()) {
+                    if (subUsed.contains(idx)) { overlap = true; break; }
+                }
+                if (!overlap) {
+                    subUsed.addAll(sub.cand.sourceStrokeIndices());
+                    double subScore = Math.max(sub.sigilRoleScore, sub.signRoleScore);
+                    int strokes = sub.cand.sourceStrokeIndices().size();
+                    subScoreSum += subScore * strokes;
+                    subStrokeCount += strokes;
+                }
+            }
+            double subWeightedAvg = subStrokeCount > 0 ? subScoreSum / subStrokeCount : 0;
+            preferSuper = superScore >= subWeightedAvg + SUPER_CANDIDATE_WIN_MARGIN;
+        }
+        
+        // Build the ordered selection list:
+        // Phase 1: Recognised non-ambiguous candidates (super-candidate handled specially)
+        List<EvaluatedCandidate> selectionOrder = new ArrayList<>();
+        if (preferSuper && superEval != null) {
+            // Super-candidate wins — place it first, then any non-overlapping sub-candidates
+            selectionOrder.add(superEval);
+            selectionOrder.addAll(subRecognised);
+        } else {
+            // Sub-candidates preferred — place them first, then super-candidate last
+            selectionOrder.addAll(subRecognised);
+            if (superEval != null) {
+                selectionOrder.add(superEval);
+            }
+        }
+        // Phase 2: Ambiguous candidates for remaining strokes
+        selectionOrder.addAll(ambiguous);
+        // Phase 3: Unknown symbols only from still-unclaimed strokes
+        selectionOrder.addAll(unknown);
+        // Phase 4: Noise
+        selectionOrder.addAll(noise);
+        
+        for (EvaluatedCandidate eval : selectionOrder) {
             boolean overlap = false;
             for (int strokeIdx : eval.cand.sourceStrokeIndices()) {
                 if (usedStrokes.contains(strokeIdx)) {
@@ -146,6 +244,11 @@ public class SelectionEngine {
                     // random shapes can match via the weaker interpretation.
                     res = fallbackRes;
                     selectedAsSigil = !isSigil;
+                }
+                
+                // An unknown super-candidate can NEVER claim strokes before recognised sub-candidates
+                if (res == null && eval.cand.isSuperCandidate()) {
+                    continue;
                 }
                 
                 if (res != null) {
@@ -258,6 +361,30 @@ public class SelectionEngine {
             return best.rejectionReason;
         }
         return RecognitionRejectionReason.SCORE_BELOW_THRESHOLD;
+    }
+    
+    /** Get the best symbol ID from an evaluated candidate, for deterministic tie-breaking. */
+    private static String bestId(EvaluatedCandidate eval) {
+        String sigilId = eval.sigilRes != null && eval.sigilRes.id != null ? eval.sigilRes.id : "";
+        String signId = eval.signRes != null && eval.signRes.id != null ? eval.signRes.id : "";
+        if (eval.sigilRoleScore >= eval.signRoleScore) {
+            return sigilId.isEmpty() ? signId : sigilId;
+        }
+        return signId.isEmpty() ? sigilId : signId;
+    }
+    
+    /** Pick the best recognition result from an evaluated candidate. */
+    private static RasterRecognizer.RecognitionResult pickBestResult(EvaluatedCandidate eval) {
+        boolean isSigil = eval.sigilRoleScore >= eval.signRoleScore;
+        RasterRecognizer.RecognitionResult primary = isSigil ? eval.sigilRes : eval.signRes;
+        RasterRecognizer.RecognitionResult fallback = isSigil ? eval.signRes : eval.sigilRes;
+        if (primary != null && (primary.recognized || primary.rejectionReason == RecognitionRejectionReason.NOISE_DISCARDED)) {
+            return primary;
+        }
+        if (fallback != null && (fallback.recognized || fallback.rejectionReason == RecognitionRejectionReason.NOISE_DISCARDED)) {
+            return fallback;
+        }
+        return primary != null ? primary : fallback;
     }
     
     private static double clamp(double v) {
