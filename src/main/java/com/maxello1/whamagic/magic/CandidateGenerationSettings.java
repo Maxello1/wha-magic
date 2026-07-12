@@ -20,7 +20,7 @@ public record CandidateGenerationSettings(
         16,     // maxPrimitiveGroups
         6,      // maxGroupsPerCandidate
         128,    // maxCandidates
-        128,    // maxRecognitionCalls
+        256,    // maxRecognitionCalls
         0.75,   // maxCandidateWidthRatio
         0.75,   // maxCandidateHeightRatio
         150.0,  // maxAngularSpanDeg

@@ -63,7 +63,7 @@ public class SelectionEngine {
             
             if (calls < maxCalls) {
                 double baseAngle = cand.angularPosition();
-                double[] offsets = {0, 15, -15, 30, -30, 180};
+                double[] offsets = {0, 90, 180, 270, 15, -15, 30, -30, 45, -45};
                 for (double offset : offsets) {
                     if (calls >= maxCalls) break;
                     double angleToTest = (baseAngle + offset) % 360;
