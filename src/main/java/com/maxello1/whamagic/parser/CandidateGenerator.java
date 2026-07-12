@@ -234,8 +234,8 @@ public class CandidateGenerator {
         }
         
         // Check segment proximity (sample every few points)
-        int step1 = Math.max(1, s1.size() / 8);
-        int step2 = Math.max(1, s2.size() / 8);
+        int step1 = Math.max(1, s1.size() / 16);
+        int step2 = Math.max(1, s2.size() / 16);
         for (int i = 0; i < s1.size(); i += step1) {
             for (int j = 0; j < s2.size(); j += step2) {
                 if (distSq(s1.get(i), s2.get(j)) < threshSq) {

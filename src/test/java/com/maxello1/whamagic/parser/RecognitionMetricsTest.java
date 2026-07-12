@@ -92,6 +92,13 @@ public class RecognitionMetricsTest {
             }
 
             SpellParser.ParseResult result = SpellParser.parse(strokes);
+            
+            // Log ring detection for debugging
+            if (result.ast != null && result.ast.ring() != null) {
+                var ring = result.ast.ring();
+                detailReport.append(String.format("  [RING] %s: ring detected (r=%.3f, completeness=%.3f, rmse=%.4f)\n",
+                        file.getName(), ring.radius(), ring.completeness(), ring.rmse()));
+            }
 
             // Track limits
             if (result.debugResult != null) {

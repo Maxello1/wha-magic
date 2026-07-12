@@ -51,7 +51,7 @@ public class RingDetector {
                 if (combined.size() < 10) continue;
                 
                 RingGlyph glyph = fitCircle(combined, 45, 0.05);
-                if (glyph != null && glyph.radius > 0.08 && glyph.radius < 0.8 && glyph.completeness > 0.5) {
+                if (glyph != null && glyph.radius > 0.08 && glyph.radius < 0.8 && glyph.completeness > 0.75) {
                     // Favor completeness, heavily penalize RMSE, penalize using extra strokes slightly
                     double score = glyph.completeness - (glyph.rmse * 5.0) - (k * 0.01);
                     if (bestGlyph == null || score > bestScore) {
