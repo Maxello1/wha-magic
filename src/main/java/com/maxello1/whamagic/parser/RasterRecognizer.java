@@ -314,11 +314,17 @@ public class RasterRecognizer {
             double directionScore = directionHistogramCompatibility(candidateDirectionHist, template.features.directionHistogram);
             double regionalScore = regionalDistributionCompatibility(candidateRegionalDist, template.features.regionalDistribution);
 
-            // Structural score with reduced stroke count weight (Phase 4)
-            double structuralScore = clamp(aspectScore * 0.50 + profileScore * 0.20 + countScore * 0.10 + directionScore * 0.10 + regionalScore * 0.10);
+            // Structural score with shape-aware weighting
+            double structuralScore = clamp(
+                    aspectScore * 0.20
+                    + profileScore * 0.10
+                    + countScore * 0.10
+                    + directionScore * 0.25
+                    + regionalScore * 0.25
+                    + (aspectScore > 0.5 && directionScore > 0.5 ? 0.10 : 0.0));
 
-            // Combined contextual score — base formula preserved from Phase 2
-            double contextual = inkScores.inkScore * 0.68 + structuralScore * 0.13 + 0.1 + 0.04 + 0.05;
+            // Combined contextual score — ink and shape both contribute meaningfully
+            double contextual = inkScores.inkScore * 0.50 + structuralScore * 0.30 + 0.20;
             double confidence = clamp(Math.min(contextual, inkScores.inkScore + 0.035));
 
             // Apply contamination cap
@@ -385,9 +391,22 @@ public class RasterRecognizer {
         if (best.confidence < MIN_CONFIDENCE) {
             reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.SCORE_BELOW_THRESHOLD;
         }
-        // Gate 2: Ambiguity gap
+        // Gate 2: Ambiguity gap — but allow structural score to resolve ties
         else if (ambiguous) {
-            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.AMBIGUOUS_TOP_MATCHES;
+            // Check if structural score can disambiguate
+            boolean structurallyResolved = false;
+            if (scored.size() > 1) {
+                double bestStructural = best.structuralScore;
+                double secondStructural = scored.get(1).structuralScore;
+                // If the best match has significantly better structural fit,
+                // trust it despite the close raster scores
+                if (bestStructural - secondStructural >= 0.10) {
+                    structurallyResolved = true;
+                }
+            }
+            if (!structurallyResolved) {
+                reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.AMBIGUOUS_TOP_MATCHES;
+            }
         }
         // Gate 3: Template coverage — candidate must cover enough of the template
         else if (best.templateCoverage < (isSigil ? MIN_TEMPLATE_COVERAGE_SIGIL : MIN_TEMPLATE_COVERAGE_SIGN)) {
