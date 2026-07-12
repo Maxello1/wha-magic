@@ -13,6 +13,19 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
+/*
+ * Portions of this file are ported or adapted from WHA Spell Simulator:
+ * https://github.com/ytnrvdf/wha-spell-simulator
+ *
+ * Copyright (c) 2026 Nervadof
+ * Licensed under the MIT License.
+ * See THIRD_PARTY_NOTICES.md.
+ *
+ * Original WHA Magic additions and modifications:
+ * Copyright (c) 2026 Maxello1.
+ * Licensed under the WHA Magic Restricted Use License.
+ */
+
 /**
  * Loads sigil and sign templates from JSON resource files
  * and registers them with the RasterRecognizer.

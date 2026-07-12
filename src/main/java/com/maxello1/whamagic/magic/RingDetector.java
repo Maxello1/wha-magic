@@ -1,3 +1,15 @@
+/*
+ * Portions of this file are ported or adapted from WHA Spell Simulator:
+ * https://github.com/ytnrvdf/wha-spell-simulator
+ *
+ * Copyright (c) 2026 Nervadof
+ * Licensed under the MIT License.
+ * See THIRD_PARTY_NOTICES.md.
+ *
+ * Original WHA Magic additions and modifications:
+ * Copyright (c) 2026 Maxello1.
+ * Licensed under the WHA Magic Restricted Use License.
+ */
 package com.maxello1.whamagic.magic;
 
 import com.maxello1.whamagic.parser.Point;

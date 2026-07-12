@@ -35,6 +35,19 @@ public class SpellParserTest {
         assertFalse(result.isValidSpell());
     }
 
+    @Test
+    public void testNullStrokes() {
+        SpellParser.ParseResult result = SpellParser.parse(null);
+        assertFalse(result.isValidSpell());
+    }
+
+    @Test
+    public void testDictionaryLoaded() {
+        int templateCount = com.maxello1.whamagic.parser.RasterRecognizer.getTemplateCount();
+        assertTrue(templateCount > 0, "Dictionary should have loaded templates");
+        assertEquals(8, templateCount, "Expected 5 sigils + 3 signs = 8 templates");
+    }
+
     private static Stream<File> fixtureFiles() {
         File dir = new File("src/test/resources/fixtures");
         if (!dir.exists() || !dir.isDirectory()) {

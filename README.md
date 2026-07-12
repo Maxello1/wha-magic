@@ -15,5 +15,21 @@ To build the mod:
 ```
 
 ## Licensing
-This project is licensed under the MIT License. See the `LICENSE` file for details.
-Algorithm concepts and gesture templates are adapted from the [WHA Spell Simulator](https://github.com/Maxello1/wha-spell-simulator). See `THIRD_PARTY_NOTICES.md` for more information.
+
+WHA Magic uses a mixed licensing structure.
+
+Original WHA Magic code, assets, documentation, integrations, gameplay
+systems, and other original materials are licensed under the
+[WHA Magic Restricted Use License](LICENSE).
+
+You may use the unmodified official mod on Minecraft servers and include the
+unmodified JAR in modpacks. Modification, redistribution of modified builds,
+commercial resale of the mod itself, and reuse of original WHA Magic code
+require prior written permission.
+
+Certain spell-recognition components are ported or adapted from
+[WHA Spell Simulator](https://github.com/ytnrvdf/wha-spell-simulator) and
+remain subject to its MIT License.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the applicable
+third-party notices and license terms.

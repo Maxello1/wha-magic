@@ -11,7 +11,7 @@
 		"homepage": "https://github.com/Maxello1/wha-magic",
 		"sources": "https://github.com/Maxello1/wha-magic"
 	},
-	"license": "MIT",
+	"license": "LicenseRef-WHA-Magic-Restricted-1.1",
 	"icon": "assets/wha-magic/icon.png",
 	"environment": "*",
 	"entrypoints": {

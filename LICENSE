@@ -1,9 +1,22 @@
 WHA MAGIC RESTRICTED USE LICENSE
-Version 1.0 – July 2026
+Version 1.1 – July 2026
 
 Copyright (c) 2026 Maxello1. All rights reserved.
 
-This license applies to the WHA Magic Minecraft mod, including its original source code, compiled binaries, assets, configuration files, documentation, and other materials contained in this repository or distributed as part of the project, except for third-party components identified separately.
+This license applies only to original WHA Magic source code, compiled code,
+assets, configuration files, documentation, and other materials for which
+Maxello1 owns or controls the necessary rights.
+
+It does not apply to third-party components, code, algorithms, templates,
+assets, or adaptations identified in THIRD_PARTY_NOTICES.md or in individual
+source-file notices. Those materials remain subject to their respective
+licenses.
+
+In particular, portions of the spell-recognition implementation derived from
+WHA Spell Simulator remain available under the MIT License stated in
+THIRD_PARTY_NOTICES.md.
+
+The following terms apply to the original WHA Magic material described above.
 
 ## 1. Definitions
 
@@ -99,7 +112,25 @@ Third-party software, algorithms, assets, libraries, or code included in or used
 
 Where a third-party license grants broader rights than this license, those broader rights continue to apply only to the relevant third-party material.
 
-## 9. Termination
+## 9. Third-Party MIT Exception
+
+Certain portions of the Software incorporate or adapt material from WHA Spell
+Simulator by Nervadof, licensed under the MIT License.
+
+The restrictions in this WHA Magic Restricted Use License do not revoke,
+replace, narrow, or supersede the rights granted under the MIT License for
+those third-party portions.
+
+Recipients may exercise the rights granted by the MIT License only with
+respect to the identifiable third-party material and adaptations covered by
+that license.
+
+All original WHA Magic additions, integrations, gameplay systems, networking,
+user interfaces, rendering, data models, assets, spell execution behavior,
+and other independently created material remain subject to this restricted
+license unless explicitly marked otherwise.
+
+## 10. Termination
 
 Your rights under this license terminate automatically if you violate any of its terms.
 
@@ -107,7 +138,7 @@ Upon termination, you must stop using and distributing the Software and remove a
 
 Sections concerning ownership, prohibited use, warranty, liability, and third-party rights survive termination.
 
-## 10. Ownership
+## 11. Ownership
 
 The Software is licensed, not sold.
 
@@ -115,17 +146,17 @@ Except for the limited permissions expressly granted in this license, all rights
 
 No implied licenses are granted.
 
-## 11. Disclaimer of Warranty
+## 12. Disclaimer of Warranty
 
 THE SOFTWARE IS PROVIDED “AS IS” AND WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
 
 USE OF THE SOFTWARE IS ENTIRELY AT YOUR OWN RISK.
 
-## 12. Limitation of Liability
+## 13. Limitation of Liability
 
 TO THE MAXIMUM EXTENT PERMITTED BY LAW, MAXELLO1 AND THE SOFTWARE’S CONTRIBUTORS SHALL NOT BE LIABLE FOR ANY CLAIM, LOSS, DAMAGE, DATA LOSS, SERVER INTERRUPTION, LOST PROFITS, OR OTHER LIABILITY ARISING FROM OR RELATED TO THE SOFTWARE OR ITS USE.
 
-## 13. Fan-Project Disclaimer
+## 14. Fan-Project Disclaimer
 
 WHA Magic is an unofficial fan-made project.
 

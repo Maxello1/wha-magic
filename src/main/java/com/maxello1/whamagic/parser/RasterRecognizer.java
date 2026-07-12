@@ -1,3 +1,15 @@
+/*
+ * Portions of this file are ported or adapted from WHA Spell Simulator:
+ * https://github.com/ytnrvdf/wha-spell-simulator
+ *
+ * Copyright (c) 2026 Nervadof
+ * Licensed under the MIT License.
+ * See THIRD_PARTY_NOTICES.md.
+ *
+ * Original WHA Magic additions and modifications:
+ * Copyright (c) 2026 Maxello1.
+ * Licensed under the WHA Magic Restricted Use License.
+ */
 package com.maxello1.whamagic.parser;
 
 import org.slf4j.Logger;
@@ -71,7 +83,7 @@ public class RasterRecognizer {
             this.ink = renderInk(norm.strokes);
             this.features = extractTemplateFeatures(this.rawStrokes, norm);
             
-            LOGGER.info("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}",
+            LOGGER.debug("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}",
                     id, this.rawStrokes.size(), norm.sourceAspectRatio, this.ink.coreInk);
         }
 
@@ -249,7 +261,7 @@ public class RasterRecognizer {
                 confidence = Math.min(confidence, cap);
             }
 
-            LOGGER.info("  vs '{}': ink={} explained={} covered={} dice={} struct={} (aspect={} count={} profile={}) -> conf={}",
+            LOGGER.debug("  vs '{}': ink={} explained={} covered={} dice={} struct={} (aspect={} count={} profile={}) -> conf={}",
                     template.id,
                     String.format("%.3f", inkScores.inkScore),
                     String.format("%.3f", inkScores.candidateExplainedRatio),
