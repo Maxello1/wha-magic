@@ -53,6 +53,27 @@ public class CandidateGenerator {
             }
         }
         
+        // Always include an "all strokes" candidate (bypasses adjacency).
+        // This is essential for the $P recognizer which is stroke-count independent
+        // and needs to see the full drawing to match complex symbols like light (6 strokes).
+        if (n > 1 && candidates.size() < settings.maxCandidates()) {
+            SymbolCandidate allStrokesCandidate = buildCandidate(new ArrayList<>(primitives), ring, candidates.size());
+            if (isValidCandidate(allStrokesCandidate, ring, settings)) {
+                // Check it's not a duplicate of an existing candidate
+                boolean isDuplicate = false;
+                Set<Integer> allIndices = new HashSet<>(allStrokesCandidate.sourceStrokeIndices());
+                for (SymbolCandidate existing : candidates) {
+                    if (new HashSet<>(existing.sourceStrokeIndices()).equals(allIndices)) {
+                        isDuplicate = true;
+                        break;
+                    }
+                }
+                if (!isDuplicate) {
+                    candidates.add(allStrokesCandidate);
+                }
+            }
+        }
+        
         return new GenerationResult(primitives, candidates, limitReached);
     }
     
