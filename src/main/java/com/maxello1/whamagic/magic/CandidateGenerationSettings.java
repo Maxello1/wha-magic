@@ -17,7 +17,7 @@ public record CandidateGenerationSettings(
     double maxEmptySpaceRatio
 ) {
     public static final CandidateGenerationSettings DEFAULTS = new CandidateGenerationSettings(
-        10,     // maxPrimitiveGroups
+        16,     // maxPrimitiveGroups
         6,      // maxGroupsPerCandidate
         128,    // maxCandidates
         128,    // maxRecognitionCalls

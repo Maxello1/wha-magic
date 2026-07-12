@@ -30,6 +30,14 @@ public class CandidateGenerator {
         boolean limitReached = false;
         int n = primitives.size();
         
+        // Insert the all-strokes super-candidate FIRST so it is always tested.
+        // For complex symbols like Light (12 strokes), the combinatorial explosion
+        // of smaller candidates would otherwise exhaust the recognition call budget.
+        if (n > 1) {
+            SymbolCandidate allStrokesCandidate = buildCandidate(new ArrayList<>(primitives), ring, 0);
+            candidates.add(allStrokesCandidate);
+        }
+        
         // Build proximity adjacency to avoid combining distant groups
         boolean[][] adjacentGroups = buildGroupAdjacency(primitives, ring, settings);
         
@@ -44,33 +52,14 @@ public class CandidateGenerator {
                 }
                 SymbolCandidate cand = buildCandidate(combo, ring, candidates.size());
                 if (isValidCandidate(cand, ring, settings)) {
+                    // Skip if it duplicates the all-strokes candidate
+                    if (n > 1 && combo.size() == primitives.size()) continue;
                     candidates.add(cand);
                 }
             }
             if (candidates.size() >= settings.maxCandidates()) {
                 limitReached = true;
                 break;
-            }
-        }
-        
-        // Always include an "all strokes" candidate (bypasses adjacency).
-        // This is essential for the $P recognizer which is stroke-count independent
-        // and needs to see the full drawing to match complex symbols like light (6 strokes).
-        if (n > 1 && candidates.size() < settings.maxCandidates()) {
-            SymbolCandidate allStrokesCandidate = buildCandidate(new ArrayList<>(primitives), ring, candidates.size());
-            if (isValidCandidate(allStrokesCandidate, ring, settings)) {
-                // Check it's not a duplicate of an existing candidate
-                boolean isDuplicate = false;
-                Set<Integer> allIndices = new HashSet<>(allStrokesCandidate.sourceStrokeIndices());
-                for (SymbolCandidate existing : candidates) {
-                    if (new HashSet<>(existing.sourceStrokeIndices()).equals(allIndices)) {
-                        isDuplicate = true;
-                        break;
-                    }
-                }
-                if (!isDuplicate) {
-                    candidates.add(allStrokesCandidate);
-                }
             }
         }
         

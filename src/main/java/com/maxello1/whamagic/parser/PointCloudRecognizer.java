@@ -34,14 +34,14 @@ public class PointCloudRecognizer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(PointCloudRecognizer.class);
 
-    /** Number of resample points. 32 is the sweet spot for accuracy vs performance. */
+    /** Number of resample points. 32 is proven accurate for the current gesture set. */
     public static final int N = 32;
 
     /** Controls step size in greedy cloud match. step = floor(N^(1-ε)). */
     private static final double EPSILON = 0.50;
 
     /** Minimum score to consider a match valid. */
-    private static final double MIN_SCORE = 0.15;
+    private static final double MIN_SCORE = 0.20;
 
     /** Minimum gap between best and second-best to avoid ambiguity. */
     private static final double MIN_GAP = 0.02;
@@ -312,9 +312,7 @@ public class PointCloudRecognizer {
         return sum;
     }
 
-    // ---- Preprocessing ----
-
-    /** Convert stroke lists (from game input or JSON templates) to a flat point cloud. */
+    /** Convert stroke lists to a flat point cloud, preserving stroke IDs. */
     private static CloudPoint[] strokesToCloud(List<List<Point>> strokes) {
         List<CloudPoint> cloud = new ArrayList<>();
         for (int s = 0; s < strokes.size(); s++) {
@@ -325,69 +323,174 @@ public class PointCloudRecognizer {
         return cloud.toArray(new CloudPoint[0]);
     }
 
-    /** Full normalization: resample to N points, scale to unit square, translate centroid to origin. */
+    /** Full normalization: per-stroke resample to N points, scale, translate centroid to origin. */
     private static CloudPoint[] normalize(CloudPoint[] points, int n) {
-        CloudPoint[] resampled = resample(points, n);
+        // Group points by strokeId
+        List<List<CloudPoint>> strokeGroups = new ArrayList<>();
+        int currentStroke = -1;
+        for (CloudPoint p : points) {
+            if (p.strokeId != currentStroke) {
+                strokeGroups.add(new ArrayList<>());
+                currentStroke = p.strokeId;
+            }
+            strokeGroups.get(strokeGroups.size() - 1).add(p);
+        }
+
+        CloudPoint[] resampled = resamplePerStroke(strokeGroups, n);
         scale(resampled);
         translateToOrigin(resampled);
         return resampled;
     }
 
     /**
-     * Resample points to exactly N equidistant points.
-     * Respects stroke boundaries (no interpolation across strokes).
+     * Resample strokes to exactly N total points, distributing proportionally by path length
+     * with a minimum of 2 points per non-trivial stroke.
+     *
+     * This ensures every meaningful stroke receives point representation,
+     * even if it is much shorter than other strokes.
      */
-    private static CloudPoint[] resample(CloudPoint[] points, int n) {
-        double totalLength = pathLength(points);
-        if (totalLength < 1e-10) {
-            // Degenerate case: all points at same location
+    private static CloudPoint[] resamplePerStroke(List<List<CloudPoint>> strokeGroups, int n) {
+        // Filter out trivial strokes (0-1 points)
+        List<List<CloudPoint>> meaningful = new ArrayList<>();
+        for (List<CloudPoint> group : strokeGroups) {
+            if (group.size() >= 2) meaningful.add(group);
+        }
+        if (meaningful.isEmpty()) {
+            // Degenerate: no meaningful strokes, fill with first point
             CloudPoint[] result = new CloudPoint[n];
-            for (int i = 0; i < n; i++) result[i] = points[0];
+            CloudPoint p = strokeGroups.isEmpty() || strokeGroups.get(0).isEmpty()
+                    ? new CloudPoint(0, 0, 0)
+                    : strokeGroups.get(0).get(0);
+            for (int i = 0; i < n; i++) result[i] = p;
             return result;
         }
-        double interval = totalLength / (n - 1);
 
-        List<CloudPoint> newPoints = new ArrayList<>();
-        newPoints.add(points[0]);
+        // Compute per-stroke path lengths
+        double[] lengths = new double[meaningful.size()];
+        double totalLength = 0;
+        for (int s = 0; s < meaningful.size(); s++) {
+            lengths[s] = strokePathLength(meaningful.get(s));
+            totalLength += lengths[s];
+        }
 
-        double accumulatedDist = 0;
+        // Assign point counts: minimum 2 per stroke, rest proportional to path length
+        int minPerStroke = 2;
+        int[] counts = new int[meaningful.size()];
+        int reserved = meaningful.size() * minPerStroke;
+        int remaining = Math.max(0, n - reserved);
 
-        // Work with a mutable copy to allow insertion
-        List<CloudPoint> ptsList = new ArrayList<>(List.of(points));
+        for (int s = 0; s < meaningful.size(); s++) {
+            int proportional = totalLength > 1e-10
+                    ? (int) Math.round((double) remaining * lengths[s] / totalLength)
+                    : remaining / meaningful.size();
+            counts[s] = minPerStroke + proportional;
+        }
 
-        for (int i = 1; i < ptsList.size() && newPoints.size() < n; i++) {
-            CloudPoint prev = ptsList.get(i - 1);
-            CloudPoint curr = ptsList.get(i);
-
-            if (curr.strokeId == prev.strokeId) {
-                double d = dist(prev, curr);
-                while (accumulatedDist + d >= interval && newPoints.size() < n) {
-                    double t = (interval - accumulatedDist) / d;
-                    double qx = prev.x + t * (curr.x - prev.x);
-                    double qy = prev.y + t * (curr.y - prev.y);
-                    CloudPoint q = new CloudPoint(qx, qy, curr.strokeId);
-                    newPoints.add(q);
-
-                    // Insert interpolated point and continue from it
-                    ptsList.add(i, q);
-                    i++;
-                    prev = q;
-                    curr = ptsList.get(i);
-                    accumulatedDist = 0;
-                    d = dist(prev, curr);
+        // Adjust to hit exactly N total
+        int total = 0;
+        for (int c : counts) total += c;
+        // Distribute surplus/deficit to the longest strokes
+        int diff = n - total;
+        while (diff != 0) {
+            int bestIdx = 0;
+            double bestLen = 0;
+            for (int s = 0; s < meaningful.size(); s++) {
+                if (diff > 0 || counts[s] > minPerStroke) {
+                    if (lengths[s] > bestLen) {
+                        bestLen = lengths[s];
+                        bestIdx = s;
+                    }
                 }
-                accumulatedDist += d;
+            }
+            counts[bestIdx] += (diff > 0) ? 1 : -1;
+            diff += (diff > 0) ? -1 : 1;
+        }
+
+        // Resample each stroke independently
+        List<CloudPoint> result = new ArrayList<>();
+        for (int s = 0; s < meaningful.size(); s++) {
+            List<CloudPoint> stroke = meaningful.get(s);
+            int strokeId = stroke.get(0).strokeId;
+            int count = Math.max(2, counts[s]);
+            List<CloudPoint> resampled = resampleSingleStroke(stroke, count, strokeId);
+            result.addAll(resampled);
+        }
+
+        // Ensure exactly N
+        while (result.size() > n) {
+            result.remove(result.size() - 1);
+        }
+        while (result.size() < n) {
+            result.add(result.get(result.size() - 1));
+        }
+
+        return result.toArray(new CloudPoint[0]);
+    }
+
+    /**
+     * Resample a single stroke to exactly count equidistant points.
+     */
+    private static List<CloudPoint> resampleSingleStroke(List<CloudPoint> stroke, int count, int strokeId) {
+        double length = strokePathLength(stroke);
+        if (length < 1e-10 || count <= 1) {
+            // Degenerate stroke: return first and last point
+            List<CloudPoint> pts = new ArrayList<>();
+            pts.add(new CloudPoint(stroke.get(0).x, stroke.get(0).y, strokeId));
+            if (count > 1) {
+                pts.add(new CloudPoint(stroke.get(stroke.size() - 1).x, stroke.get(stroke.size() - 1).y, strokeId));
+            }
+            while (pts.size() < count) {
+                pts.add(pts.get(pts.size() - 1));
+            }
+            return pts;
+        }
+
+        double interval = length / (count - 1);
+        List<CloudPoint> newPoints = new ArrayList<>();
+        newPoints.add(new CloudPoint(stroke.get(0).x, stroke.get(0).y, strokeId));
+
+        double accDist = 0;
+        int srcIdx = 1;
+
+        while (newPoints.size() < count && srcIdx < stroke.size()) {
+            double d = dist(stroke.get(srcIdx - 1), stroke.get(srcIdx));
+            if (d < 1e-10) {
+                srcIdx++;
+                continue;
+            }
+
+            if (accDist + d >= interval) {
+                double t = (interval - accDist) / d;
+                double qx = stroke.get(srcIdx - 1).x + t * (stroke.get(srcIdx).x - stroke.get(srcIdx - 1).x);
+                double qy = stroke.get(srcIdx - 1).y + t * (stroke.get(srcIdx).y - stroke.get(srcIdx - 1).y);
+                CloudPoint q = new CloudPoint(qx, qy, strokeId);
+                newPoints.add(q);
+                // Insert and continue from interpolated point
+                stroke = new ArrayList<>(stroke);
+                stroke.add(srcIdx, q);
+                srcIdx++;
+                accDist = 0;
             } else {
-                accumulatedDist = 0; // reset at stroke boundary
+                accDist += d;
+                srcIdx++;
             }
         }
 
-        // If rounding errors leave us short, duplicate last point
-        while (newPoints.size() < n) {
-            newPoints.add(newPoints.get(newPoints.size() - 1));
+        // Pad with last point if short
+        while (newPoints.size() < count) {
+            newPoints.add(new CloudPoint(stroke.get(stroke.size() - 1).x, stroke.get(stroke.size() - 1).y, strokeId));
         }
 
-        return newPoints.subList(0, n).toArray(new CloudPoint[0]);
+        return newPoints.subList(0, count);
+    }
+
+    /** Compute path length along a single stroke's points. */
+    private static double strokePathLength(List<CloudPoint> stroke) {
+        double length = 0;
+        for (int i = 1; i < stroke.size(); i++) {
+            length += dist(stroke.get(i - 1), stroke.get(i));
+        }
+        return length;
     }
 
     /** Scale points to fit within a unit square, preserving aspect ratio. */
