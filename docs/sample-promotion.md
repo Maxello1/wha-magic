@@ -11,6 +11,13 @@ Preview and promote a recording with:
 .\gradlew promoteSample -Psample="run/dev-samples/sample_....json"
 ```
 
+To print diagnostics without starting the promotion prompts, add
+`-PpreviewOnly`:
+
+```powershell
+.\gradlew promoteSample -Psample="run/dev-samples/sample_....json" -PpreviewOnly
+```
+
 The tool prints the current server-authoritative parser result and bounded-work
 diagnostics before prompting for all fixture metadata. It requires one explicit
 role:

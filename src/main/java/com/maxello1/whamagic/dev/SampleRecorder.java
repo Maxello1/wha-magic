@@ -4,187 +4,245 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.maxello1.whamagic.magic.*;
+import com.maxello1.whamagic.magic.RecognitionAlternative;
+import com.maxello1.whamagic.magic.RecognizedSigil;
+import com.maxello1.whamagic.magic.RecognizedSign;
+import com.maxello1.whamagic.magic.UnknownSymbol;
 import com.maxello1.whamagic.parser.Point;
 import com.maxello1.whamagic.parser.PointCloudRecognizer;
+import com.maxello1.whamagic.parser.SegmentationDebugResult;
 import com.maxello1.whamagic.parser.SpellDictionary;
 import com.maxello1.whamagic.parser.SpellParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
-import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Objects;
 
-/**
- * Development utility to save drawings and their recognition results as JSON samples.
- * Saves under run/dev-samples/ which is gitignored.
- */
-public class SampleRecorder {
+/** Saves development drawings and their recognition results as JSON samples. */
+public final class SampleRecorder {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SampleRecorder.class);
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-    private static final String SAMPLES_DIR = "run/dev-samples";
+    private static final Path SAMPLES_DIRECTORY = Path.of("run", "dev-samples");
+    private static final DateTimeFormatter FILE_TIMESTAMP =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss-SSS");
+
+    private SampleRecorder() {}
 
     /**
      * Save the current drawing and parse result as a JSON sample file.
-     * 
+     *
      * @param rawStrokes the raw drawn strokes
      * @param result the parse result (may be null if parsing failed)
      * @param notes optional notes about this sample
      * @return the saved file path, or null on failure
      */
-    public static String saveSample(List<List<Point>> rawStrokes, SpellParser.ParseResult result, String notes) {
+    public static String saveSample(
+            List<List<Point>> rawStrokes,
+            SpellParser.ParseResult result,
+            String notes) {
+        LocalDateTime recordedAt = LocalDateTime.now();
         try {
-            File dir = new File(SAMPLES_DIR);
-            if (!dir.exists()) {
-                dir.mkdirs();
-            }
-
-            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss-SSS"));
-            File file = new File(dir, "sample_" + timestamp + ".json");
-
-            JsonObject root = new JsonObject();
-            SpellDictionary.DictionarySnapshot dictionary = SpellDictionary.snapshot();
-            root.addProperty("formatVersion", 3);
-            root.addProperty("recognizerVersion", PointCloudRecognizer.RECOGNIZER_VERSION);
-            root.addProperty("dictionaryVersion", dictionary.version());
-            root.addProperty("dictionaryHash", dictionary.hash());
-            root.addProperty("sampleRole", "experimental");
-            JsonObject expectedIntent = new JsonObject();
-            expectedIntent.add("sigils", new JsonArray());
-            expectedIntent.add("signs", new JsonArray());
-            root.add("expectedIntent", expectedIntent);
-            root.addProperty("notes", notes == null ? "" : notes);
-            root.addProperty("sourceDate", LocalDate.now().toString());
-            root.addProperty("influencedTemplateOrThreshold", false);
-            root.addProperty("timestamp", LocalDateTime.now().toString());
-
-            // Raw strokes
-            JsonArray strokesArray = new JsonArray();
-            if (rawStrokes != null) {
-                for (List<Point> stroke : rawStrokes) {
-                    JsonArray strokeArray = new JsonArray();
-                    for (Point p : stroke) {
-                        JsonObject point = new JsonObject();
-                        point.addProperty("x", p.x);
-                        point.addProperty("y", p.y);
-                        strokeArray.add(point);
-                    }
-                    strokesArray.add(strokeArray);
-                }
-            }
-            root.add("rawStrokes", strokesArray);
-
-            // Result data
-            if (result != null) {
-                JsonObject resultObj = new JsonObject();
-                resultObj.addProperty("valid", result.isValidSpell());
-
-                if (result.ast != null) {
-                    // Sigils
-                    JsonArray sigilsArray = new JsonArray();
-                    if (result.ast.sigils() != null) {
-                        for (RecognizedSigil sigil : result.ast.sigils()) {
-                            JsonObject s = new JsonObject();
-                            s.addProperty("id", sigil.id() != null ? sigil.id().toString() : "null");
-                            s.addProperty("matchedTemplateId", sigil.matchedTemplateId());
-                            s.addProperty("element", sigil.element() != null ? sigil.element().name() : "null");
-                            s.addProperty("confidence", Math.round(sigil.recognitionConfidence() * 1000.0) / 1000.0);
-                            s.addProperty("rejectionReason", sigil.rejectionReason().name());
-                            s.add("sourceStrokeIndices", GSON.toJsonTree(sigil.sourceStrokeIndices()));
-                            addAlternatives(s, sigil.alternatives());
-                            sigilsArray.add(s);
-                        }
-                    }
-                    resultObj.add("sigils", sigilsArray);
-
-                    // Signs
-                    JsonArray signsArray = new JsonArray();
-                    if (result.ast.signs() != null) {
-                        for (RecognizedSign sign : result.ast.signs()) {
-                            JsonObject s = new JsonObject();
-                            s.addProperty("id", sign.id());
-                            s.addProperty("matchedTemplateId", sign.matchedTemplateId());
-                            s.addProperty("confidence", Math.round(sign.confidence() * 1000.0) / 1000.0);
-                            s.addProperty("angleAroundRing", Math.round(sign.angleAroundRing() * 100.0) / 100.0);
-                            s.add("sourceStrokeIndices", GSON.toJsonTree(sign.sourceStrokeIndices()));
-                            signsArray.add(s);
-                        }
-                    }
-                    resultObj.add("signs", signsArray);
-
-                    // Unknowns
-                    JsonArray unknownsArray = new JsonArray();
-                    if (result.ast.unknownSymbols() != null) {
-                        for (UnknownSymbol unk : result.ast.unknownSymbols()) {
-                            JsonObject u = new JsonObject();
-                            u.addProperty("candidateId", unk.candidateId());
-                            u.addProperty("state", unk.state().name());
-                            u.addProperty("rejectionReason", unk.rejectionReason().name());
-                            u.add("sourceStrokeIndices", GSON.toJsonTree(unk.sourceStrokeIndices()));
-                            addAlternatives(u, unk.alternatives());
-                            unknownsArray.add(u);
-                        }
-                    }
-                    resultObj.add("unknowns", unknownsArray);
-                }
-
-                // Diagnostics
-                if (result.debugResult != null) {
-                    resultObj.addProperty("candidateCount", result.debugResult.candidateCount());
-                    resultObj.addProperty("recognitionCalls", result.debugResult.recognitionCalls());
-                    resultObj.addProperty("primitiveGroupCount", result.debugResult.primitiveGroupCount());
-                    resultObj.addProperty("selectedCandidateCount", result.debugResult.selectedCandidateCount());
-                    resultObj.addProperty("candidateLimitReached", result.debugResult.candidateLimitReached());
-                    resultObj.addProperty("ringBudgetExhausted", result.debugResult.ringBudgetExhausted());
-                    resultObj.addProperty("recognitionBudgetExhausted", result.debugResult.recognitionBudgetExhausted());
-                    resultObj.addProperty("unevaluatedCandidateCount", result.debugResult.unevaluatedCandidateCount());
-                    resultObj.add("droppedSourceStrokeIndices", GSON.toJsonTree(result.debugResult.droppedSourceStrokeIndices()));
-                    resultObj.addProperty("ringCombinationsConsidered", result.debugResult.ringCombinationsConsidered());
-                    resultObj.addProperty("ringFitsAttempted", result.debugResult.ringFitsAttempted());
-                    resultObj.addProperty("ringElapsedNanos", result.debugResult.ringElapsedNanos());
-                    resultObj.add("ringStrokeIndices", GSON.toJsonTree(result.debugResult.ringStrokeIndices()));
-                }
-
-                root.add("result", resultObj);
-            }
-
-            try (FileWriter writer = new FileWriter(file)) {
-                GSON.toJson(root, writer);
-            }
-
-            LOGGER.info("Sample saved: {}", file.getAbsolutePath());
-            return file.getAbsolutePath();
-
-        } catch (IOException e) {
-            LOGGER.error("Failed to save sample", e);
+            Path file = writeSample(SAMPLES_DIRECTORY, rawStrokes, result, notes, recordedAt);
+            LOGGER.info("Sample saved: {}", file);
+            return file.toString();
+        } catch (IOException exception) {
+            LOGGER.error("Failed to save sample", exception);
             return null;
         }
     }
 
-    private static void addAlternatives(JsonObject parent, List<RecognitionAlternative> alternatives) {
-        JsonArray altsArray = new JsonArray();
+    static Path writeSample(
+            Path samplesDirectory,
+            List<List<Point>> rawStrokes,
+            SpellParser.ParseResult result,
+            String notes,
+            LocalDateTime recordedAt) throws IOException {
+        Objects.requireNonNull(samplesDirectory, "samplesDirectory");
+        Objects.requireNonNull(recordedAt, "recordedAt");
+
+        Files.createDirectories(samplesDirectory);
+        Path file = samplesDirectory.resolve(
+                "sample_" + recordedAt.format(FILE_TIMESTAMP) + ".json").toAbsolutePath();
+        JsonObject sample = createSample(rawStrokes, result, notes, recordedAt);
+        try (Writer writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+            GSON.toJson(sample, writer);
+        }
+        return file;
+    }
+
+    private static JsonObject createSample(
+            List<List<Point>> rawStrokes,
+            SpellParser.ParseResult result,
+            String notes,
+            LocalDateTime recordedAt) {
+        SpellDictionary.DictionarySnapshot dictionary = SpellDictionary.snapshot();
+        JsonObject sample = new JsonObject();
+        sample.addProperty("formatVersion", 3);
+        sample.addProperty("recognizerVersion", PointCloudRecognizer.RECOGNIZER_VERSION);
+        sample.addProperty("dictionaryVersion", dictionary.version());
+        sample.addProperty("dictionaryHash", dictionary.hash());
+        sample.addProperty("sampleRole", "experimental");
+        sample.add("expectedIntent", emptyExpectedIntent());
+        sample.addProperty("notes", notes == null ? "" : notes);
+        sample.addProperty("sourceDate", recordedAt.toLocalDate().toString());
+        sample.addProperty("influencedTemplateOrThreshold", false);
+        sample.addProperty("timestamp", recordedAt.toString());
+        sample.add("rawStrokes", rawStrokesJson(rawStrokes));
+        if (result != null) {
+            sample.add("result", resultJson(result));
+        }
+        return sample;
+    }
+
+    private static JsonObject emptyExpectedIntent() {
+        JsonObject expectedIntent = new JsonObject();
+        expectedIntent.add("sigils", new JsonArray());
+        expectedIntent.add("signs", new JsonArray());
+        return expectedIntent;
+    }
+
+    private static JsonArray rawStrokesJson(List<List<Point>> rawStrokes) {
+        JsonArray strokesJson = new JsonArray();
+        if (rawStrokes == null) {
+            return strokesJson;
+        }
+        for (List<Point> stroke : rawStrokes) {
+            JsonArray strokeJson = new JsonArray();
+            for (Point point : stroke) {
+                JsonObject pointJson = new JsonObject();
+                pointJson.addProperty("x", point.x);
+                pointJson.addProperty("y", point.y);
+                strokeJson.add(pointJson);
+            }
+            strokesJson.add(strokeJson);
+        }
+        return strokesJson;
+    }
+
+    private static JsonObject resultJson(SpellParser.ParseResult result) {
+        JsonObject resultJson = new JsonObject();
+        resultJson.addProperty("valid", result.isValidSpell());
+        if (result.ast != null) {
+            resultJson.add("sigils", sigilsJson(result.ast.sigils()));
+            resultJson.add("signs", signsJson(result.ast.signs()));
+            resultJson.add("unknowns", unknownsJson(result.ast.unknownSymbols()));
+        }
+        if (result.debugResult != null) {
+            addDiagnostics(resultJson, result.debugResult);
+        }
+        return resultJson;
+    }
+
+    private static JsonArray sigilsJson(List<RecognizedSigil> sigils) {
+        JsonArray sigilsJson = new JsonArray();
+        if (sigils == null) {
+            return sigilsJson;
+        }
+        for (RecognizedSigil sigil : sigils) {
+            JsonObject sigilJson = new JsonObject();
+            sigilJson.addProperty("id", sigil.id() != null ? sigil.id().toString() : "null");
+            sigilJson.addProperty("matchedTemplateId", sigil.matchedTemplateId());
+            sigilJson.addProperty("element", sigil.element() != null ? sigil.element().name() : "null");
+            sigilJson.addProperty("confidence", round(sigil.recognitionConfidence(), 1000.0));
+            sigilJson.addProperty("rejectionReason", sigil.rejectionReason().name());
+            sigilJson.add("sourceStrokeIndices", GSON.toJsonTree(sigil.sourceStrokeIndices()));
+            addAlternatives(sigilJson, sigil.alternatives());
+            sigilsJson.add(sigilJson);
+        }
+        return sigilsJson;
+    }
+
+    private static JsonArray signsJson(List<RecognizedSign> signs) {
+        JsonArray signsJson = new JsonArray();
+        if (signs == null) {
+            return signsJson;
+        }
+        for (RecognizedSign sign : signs) {
+            JsonObject signJson = new JsonObject();
+            signJson.addProperty("id", sign.id());
+            signJson.addProperty("matchedTemplateId", sign.matchedTemplateId());
+            signJson.addProperty("confidence", round(sign.confidence(), 1000.0));
+            signJson.addProperty("angleAroundRing", round(sign.angleAroundRing(), 100.0));
+            signJson.add("sourceStrokeIndices", GSON.toJsonTree(sign.sourceStrokeIndices()));
+            signsJson.add(signJson);
+        }
+        return signsJson;
+    }
+
+    private static JsonArray unknownsJson(List<UnknownSymbol> unknowns) {
+        JsonArray unknownsJson = new JsonArray();
+        if (unknowns == null) {
+            return unknownsJson;
+        }
+        for (UnknownSymbol unknown : unknowns) {
+            JsonObject unknownJson = new JsonObject();
+            unknownJson.addProperty("candidateId", unknown.candidateId());
+            unknownJson.addProperty("state", unknown.state().name());
+            unknownJson.addProperty("rejectionReason", unknown.rejectionReason().name());
+            unknownJson.add("sourceStrokeIndices", GSON.toJsonTree(unknown.sourceStrokeIndices()));
+            addAlternatives(unknownJson, unknown.alternatives());
+            unknownsJson.add(unknownJson);
+        }
+        return unknownsJson;
+    }
+
+    private static void addDiagnostics(
+            JsonObject resultJson,
+            SegmentationDebugResult diagnostics) {
+        resultJson.addProperty("candidateCount", diagnostics.candidateCount());
+        resultJson.addProperty("recognitionCalls", diagnostics.recognitionCalls());
+        resultJson.addProperty("primitiveGroupCount", diagnostics.primitiveGroupCount());
+        resultJson.addProperty("selectedCandidateCount", diagnostics.selectedCandidateCount());
+        resultJson.addProperty("candidateLimitReached", diagnostics.candidateLimitReached());
+        resultJson.addProperty("ringBudgetExhausted", diagnostics.ringBudgetExhausted());
+        resultJson.addProperty("recognitionBudgetExhausted", diagnostics.recognitionBudgetExhausted());
+        resultJson.addProperty("unevaluatedCandidateCount", diagnostics.unevaluatedCandidateCount());
+        resultJson.add("droppedSourceStrokeIndices", GSON.toJsonTree(diagnostics.droppedSourceStrokeIndices()));
+        resultJson.addProperty("ringCombinationsConsidered", diagnostics.ringCombinationsConsidered());
+        resultJson.addProperty("ringFitsAttempted", diagnostics.ringFitsAttempted());
+        resultJson.addProperty("ringElapsedNanos", diagnostics.ringElapsedNanos());
+        resultJson.add("ringStrokeIndices", GSON.toJsonTree(diagnostics.ringStrokeIndices()));
+    }
+
+    private static void addAlternatives(
+            JsonObject parent,
+            List<RecognitionAlternative> alternatives) {
+        JsonArray alternativesJson = new JsonArray();
         if (alternatives != null) {
-            for (RecognitionAlternative alt : alternatives) {
-                JsonObject a = new JsonObject();
-                a.addProperty("id", alt.id() != null ? alt.id().toString() : "null");
-                a.addProperty("displayName", alt.displayName());
-                a.addProperty("kind", alt.kind() != null ? alt.kind().name() : "null");
-                a.addProperty("rawScore", Math.round(alt.rawScore() * 1000.0) / 1000.0);
-                a.addProperty("roleScore", Math.round(alt.roleScore() * 1000.0) / 1000.0);
-                a.addProperty("templateCoverage", Math.round(alt.templateCoverage() * 1000.0) / 1000.0);
-                a.addProperty("candidateExplainedRatio", Math.round(alt.candidateExplainedRatio() * 1000.0) / 1000.0);
-                a.addProperty("unexplainedInkRatio", Math.round(alt.unexplainedInkRatio() * 1000.0) / 1000.0);
-                a.addProperty("structuralScore", Math.round(alt.structuralScore() * 1000.0) / 1000.0);
-                a.addProperty("rotationDeg", Math.round(alt.rotationDeg() * 100.0) / 100.0);
-                altsArray.add(a);
+            for (RecognitionAlternative alternative : alternatives) {
+                JsonObject alternativeJson = new JsonObject();
+                alternativeJson.addProperty(
+                        "id", alternative.id() != null ? alternative.id().toString() : "null");
+                alternativeJson.addProperty("displayName", alternative.displayName());
+                alternativeJson.addProperty(
+                        "kind", alternative.kind() != null ? alternative.kind().name() : "null");
+                alternativeJson.addProperty("rawScore", round(alternative.rawScore(), 1000.0));
+                alternativeJson.addProperty("roleScore", round(alternative.roleScore(), 1000.0));
+                alternativeJson.addProperty(
+                        "templateCoverage", round(alternative.templateCoverage(), 1000.0));
+                alternativeJson.addProperty(
+                        "candidateExplainedRatio", round(alternative.candidateExplainedRatio(), 1000.0));
+                alternativeJson.addProperty(
+                        "unexplainedInkRatio", round(alternative.unexplainedInkRatio(), 1000.0));
+                alternativeJson.addProperty(
+                        "structuralScore", round(alternative.structuralScore(), 1000.0));
+                alternativeJson.addProperty("rotationDeg", round(alternative.rotationDeg(), 100.0));
+                alternativesJson.add(alternativeJson);
             }
         }
-        parent.add("alternatives", altsArray);
+        parent.add("alternatives", alternativesJson);
+    }
+
+    private static double round(double value, double scale) {
+        return Math.round(value * scale) / scale;
     }
 }

@@ -1,3 +1,6 @@
+HISTORICAL PRE-FIX DIAGNOSTIC (0.3.0)
+This snapshot is retained for reference and does not represent current recognition behavior or limits.
+
 === Recognition Metrics Report ===
 
 neg_diagonal_line.json              expected=(none)               recognized=(none)                        
@@ -156,4 +159,3 @@ Max recognition calls: 84
 
   [DETAIL] sign_levitation.json:
     (no evaluated candidates)
-

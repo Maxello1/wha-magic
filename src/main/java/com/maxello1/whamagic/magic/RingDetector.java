@@ -17,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -199,19 +200,21 @@ public class RingDetector {
             return new RingSearchResult(null, diagnostics);
         }
 
-        LOGGER.debug("Ring detection: found ring (r={}, completeness={}, rmse={}, normRmse={}, " +
-                        "maxResid={}, residStd={}, medTangent={}, p90Tangent={}, circ={}, combinations={}, fits={})",
-                String.format("%.3f", bestGlyph.radius),
-                String.format("%.3f", bestGlyph.completeness),
-                String.format("%.4f", bestGlyph.rmse),
-                String.format("%.4f", bestGlyph.normalizedRmse),
-                String.format("%.4f", bestGlyph.maxNormalizedResidual),
-                String.format("%.4f", bestGlyph.residualStdDev),
-                String.format("%.4f", bestGlyph.medianTangentAlignment),
-                String.format("%.4f", bestGlyph.p90TangentAlignment),
-                String.format("%.4f", bestGlyph.circularity),
-                searchState.combinationsConsidered,
-                searchState.fitsAttempted);
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("Ring detection: found ring (r={}, completeness={}, rmse={}, normRmse={}, " +
+                            "maxResid={}, residStd={}, medTangent={}, p90Tangent={}, circ={}, combinations={}, fits={})",
+                    String.format("%.3f", bestGlyph.radius),
+                    String.format("%.3f", bestGlyph.completeness),
+                    String.format("%.4f", bestGlyph.rmse),
+                    String.format("%.4f", bestGlyph.normalizedRmse),
+                    String.format("%.4f", bestGlyph.maxNormalizedResidual),
+                    String.format("%.4f", bestGlyph.residualStdDev),
+                    String.format("%.4f", bestGlyph.medianTangentAlignment),
+                    String.format("%.4f", bestGlyph.p90TangentAlignment),
+                    String.format("%.4f", bestGlyph.circularity),
+                    searchState.combinationsConsidered,
+                    searchState.fitsAttempted);
+        }
         return new RingSearchResult(new RingDetection(bestGlyph, Set.copyOf(bestStrokes)), diagnostics);
     }
 
@@ -356,7 +359,8 @@ public class RingDetector {
         if (residualStdDev > thresholds.maxResidualStdDev) return null;
 
         // ---- Tangent-to-radius alignment (per-stroke, skip endpoints) ----
-        List<Double> alignments = new ArrayList<>();
+        double[] alignments = new double[n];
+        int alignmentCount = 0;
         for (List<Point> stroke : candidateStrokes) {
             if (stroke.size() < 3) continue;
             // Skip first and last point of each stroke
@@ -383,17 +387,17 @@ public class RingDetector {
 
                 // Absolute dot product: 0 = perpendicular (circle), 1 = parallel (polygon edge)
                 double alignment = Math.abs(tx * rx + ty * ry);
-                alignments.add(alignment);
+                alignments[alignmentCount++] = alignment;
             }
         }
 
         double medianTangentAlignment = 0;
         double p90TangentAlignment = 0;
-        if (!alignments.isEmpty()) {
-            double[] sorted = alignments.stream().mapToDouble(Double::doubleValue).sorted().toArray();
-            medianTangentAlignment = sorted[sorted.length / 2];
-            int p90Index = (int) (sorted.length * 0.90);
-            p90TangentAlignment = sorted[Math.min(p90Index, sorted.length - 1)];
+        if (alignmentCount > 0) {
+            Arrays.sort(alignments, 0, alignmentCount);
+            medianTangentAlignment = alignments[alignmentCount / 2];
+            int p90Index = (int) (alignmentCount * 0.90);
+            p90TangentAlignment = alignments[Math.min(p90Index, alignmentCount - 1)];
         }
 
         boolean roughClosedStrokeProfile = candidateStrokes.size() == 1

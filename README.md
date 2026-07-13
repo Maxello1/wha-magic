@@ -1,18 +1,31 @@
 # WHA Magic
 
-WHA Magic is a Minecraft Fabric mod (targeted for Minecraft 26.2, Java 25) that introduces a drawing-based magic system.
-It parses drawn strokes into spells based on elements and signs, evaluating geometric and structural characteristics instead of rigid templates.
+WHA Magic is a Minecraft Fabric mod for Minecraft 26.2 and Java 25 that
+introduces a drawing-based magic system. It matches drawn strokes against a
+versioned symbol dictionary using point-cloud recognition with geometric and
+structural validation.
 
 ## Features
-- **Server-Authoritative Parsing:** Spell gestures are evaluated securely on the server.
-- **Robust Stroke Recognition:** Identifies core ring structures, categorizes strokes by distance and layer, and resolves sigils/signs algorithmically.
-- **Configurable:** Uses `wha-magic-server.json` to define limits on spell casting rate, network points, and effects.
+
+- **Server-authoritative parsing:** Spell gestures are evaluated on the server.
+- **Dictionary-backed recognition:** Detects spell rings, segments the remaining
+  ink, and matches candidates against validated sigil and sign templates.
+- **Configurable limits:** Uses `wha-magic-server.json` to configure spell-casting
+  rate limits, network point limits, and effect settings.
 
 ## Setup
+
 To build the mod:
+
 ```sh
 ./gradlew clean build
 ```
+
+## Development documentation
+
+- [Dictionary snapshots](docs/dictionary-snapshots.md)
+- [Recognition rules](docs/recognition-rules.md)
+- [Sample promotion](docs/sample-promotion.md)
 
 ## Licensing
 

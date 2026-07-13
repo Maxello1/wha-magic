@@ -11,16 +11,7 @@ import com.maxello1.whamagic.magic.SymbolRecognitionResult;
 
 import java.util.List;
 
-/**
- * Interface for symbol recognition implementations.
- *
- * <p>Abstracts the recognition algorithm so that different implementations
- * (Raster, $P, $P+, and future $Q) can be swapped in SelectionEngine
- * without code changes.</p>
- *
- * <p>Recognizer implementations consume the immutable active dictionary
- * snapshot and never mutate template state during recognition.</p>
- */
+/** Recognizes candidate strokes against the immutable active dictionary. */
 public interface SymbolRecognizer {
 
     /** Human-readable name for logging and benchmark reports. */

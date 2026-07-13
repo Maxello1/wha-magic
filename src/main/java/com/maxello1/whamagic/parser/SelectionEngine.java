@@ -54,7 +54,7 @@ public class SelectionEngine {
         for (int candidateIndex = 0; candidateIndex < candidates.size(); candidateIndex++) {
             SymbolCandidate cand = candidates.get(candidateIndex);
             
-            // Phase 2: Early noise rejection — skip recognition for obvious noise
+            // Skip recognition for obvious noise.
             if (UnknownInkClassifier.isNoise(cand.strokes())) {
                 // Create a stub result for noise candidates
                 SymbolRecognitionResult noiseRes = SymbolRecognitionResult.rejected(
@@ -63,7 +63,7 @@ public class SelectionEngine {
                 continue;
             }
             
-            // Optimization: skip irrelevant tests based on radial position.
+            // Limit role checks using the candidate's radial position.
             // Candidates near center are likely sigils; candidates near edge are likely signs.
             // In multi-symbol spells, sigils may be placed anywhere inside the ring,
             // so the sigil zone extends up to 0.85 of the ring radius.
@@ -101,7 +101,7 @@ public class SelectionEngine {
             SymbolRecognitionResult bestSignRes = null;
             double bestAngle = 0;
             
-            // Optimization: skip sign rotation tests for clearly central candidates
+            // Clearly central candidates do not need sign rotation probes.
             if (likelySign) {
                 double baseAngle = cand.angularPosition();
                 for (double offset : signRotationOffsets) {
@@ -216,7 +216,7 @@ public class SelectionEngine {
         }
         
         // Build the ordered selection list:
-        // Phase 1: Recognised non-ambiguous candidates (super-candidate handled specially)
+        // Recognized non-ambiguous candidates, with the super-candidate handled specially.
         List<EvaluatedCandidate> selectionOrder = new ArrayList<>();
         if (preferSuper && superEval != null) {
             // Super-candidate wins — place it first, then any non-overlapping sub-candidates
@@ -229,11 +229,11 @@ public class SelectionEngine {
                 selectionOrder.add(superEval);
             }
         }
-        // Phase 2: Ambiguous candidates for remaining strokes
+        // Ambiguous candidates may claim remaining strokes.
         selectionOrder.addAll(ambiguous);
-        // Phase 3: Unknown symbols only from still-unclaimed strokes
+        // Unknown symbols may claim only still-unclaimed strokes.
         selectionOrder.addAll(unknown);
-        // Phase 4: Noise
+        // Noise is considered last and discarded below.
         selectionOrder.addAll(noise);
         
         for (EvaluatedCandidate eval : selectionOrder) {

@@ -17,7 +17,7 @@ The following source files contain substantial adaptations of upstream code:
 
 - `src/main/java/com/maxello1/whamagic/parser/RasterRecognizer.java`
 - `src/main/java/com/maxello1/whamagic/parser/TemplateNormalizer.java`
-- `src/main/java/com/maxello1/whamagic/parser/RingDetector.java`
+- `src/main/java/com/maxello1/whamagic/magic/RingDetector.java`
 - `src/main/java/com/maxello1/whamagic/parser/SpellDictionary.java`
 
 ### MIT License

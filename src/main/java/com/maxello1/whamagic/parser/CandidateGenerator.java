@@ -12,6 +12,8 @@ import java.util.HashSet;
 
 public class CandidateGenerator {
 
+    private static final double DIRECT_STROKE_PROXIMITY = 0.06;
+
     /** Result of candidate generation, including diagnostic data. */
     public record GenerationResult(
         List<PrimitiveStrokeGroup> primitiveGroups,
@@ -204,10 +206,9 @@ public class CandidateGenerator {
         
         int n = strokes.size();
         double refSize = ring != null ? ring.radius() * 2 : 1.0;
-        // Detached rays and accents belonging to one symbol may not touch exactly.
-        // A 0.06 gap groups the current Wind geometry while keeping its nearest rim sign separate.
-        double directThresh = 0.06;
-        double directThreshSq = directThresh * directThresh;
+        // Detached rays and accents belonging to one symbol may not touch exactly,
+        // while nearby ring signs still need to remain separate.
+        double directThreshSq = DIRECT_STROKE_PROXIMITY * DIRECT_STROKE_PROXIMITY;
         double maxGroupSpan = refSize * settings.maxInternalGapRatio() * 2; // max span before splitting
         
         // Build direct connectivity based on endpoint proximity
@@ -306,7 +307,7 @@ public class CandidateGenerator {
             return result;
         }
         
-        // Split along the larger axis using centroid k-means (simple 2-split)
+        // Split at the component midpoint along its larger axis.
         boolean splitX = spanX > spanY;
         double splitPoint = splitX ? (minX + maxX) / 2 : (minY + maxY) / 2;
         

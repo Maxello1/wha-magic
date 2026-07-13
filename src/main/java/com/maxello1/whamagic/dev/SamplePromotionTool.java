@@ -102,6 +102,8 @@ public final class SamplePromotionTool {
         }
     }
 
+    record CommandLine(Path input, boolean previewOnly) {}
+
     private record RecordedSample(JsonArray rawStrokes, List<List<Point>> points, LocalDate sourceDate) {}
 
     public static Preview preview(Path recordedSample) throws IOException {
@@ -147,11 +149,14 @@ public final class SamplePromotionTool {
 
     /** Console entry point for development use; every promotion choice is explicit. */
     public static void main(String[] args) throws Exception {
+        CommandLine commandLine = parseCommandLine(args);
         try (Scanner scanner = new Scanner(System.in, StandardCharsets.UTF_8)) {
-            Path input = args.length > 0 ? Path.of(args[0]) : promptPath(scanner, "F5 sample path");
+            Path input = commandLine.input() != null
+                    ? commandLine.input()
+                    : promptPath(scanner, "F5 sample path");
             Preview preview = preview(input);
             printPreview(preview);
-            if (args.length > 1 && "--preview-only".equals(args[1])) {
+            if (commandLine.previewOnly()) {
                 return;
             }
 
@@ -172,6 +177,27 @@ public final class SamplePromotionTool {
                     expectRing, expectValid, notes, preview.sourceDate(), influenced));
             System.out.println("Fixture written to " + output.toAbsolutePath());
         }
+    }
+
+    static CommandLine parseCommandLine(String[] args) {
+        Objects.requireNonNull(args, "args");
+        Path input = null;
+        boolean previewOnly = false;
+        for (String argument : args) {
+            if ("--preview-only".equals(argument)) {
+                if (previewOnly) {
+                    throw new IllegalArgumentException("Duplicate option: --preview-only");
+                }
+                previewOnly = true;
+            } else if (argument.startsWith("--")) {
+                throw new IllegalArgumentException("Unknown option: " + argument);
+            } else if (input == null) {
+                input = Path.of(argument);
+            } else {
+                throw new IllegalArgumentException("Unexpected argument: " + argument);
+            }
+        }
+        return new CommandLine(input, previewOnly);
     }
 
     private static RecordedSample readRecordedSample(Path path) throws IOException {
@@ -203,12 +229,13 @@ public final class SamplePromotionTool {
             JsonArray points = strokeElement.getAsJsonArray();
             for (int pointIndex = 0; pointIndex < points.size(); pointIndex++) {
                 JsonElement pointElement = points.get(pointIndex);
+                String context = "rawStrokes[" + strokeIndex + "][" + pointIndex + "]";
                 if (!pointElement.isJsonObject()) {
-                    throw new IllegalArgumentException("raw stroke point must be an object");
+                    throw new IllegalArgumentException(context + " must be an object");
                 }
                 JsonObject point = pointElement.getAsJsonObject();
-                double x = requiredFinite(point, "x");
-                double y = requiredFinite(point, "y");
+                double x = requiredFinite(point, "x", context);
+                double y = requiredFinite(point, "y", context);
                 stroke.add(new Point(x, y));
             }
             strokes.add(List.copyOf(stroke));
@@ -216,14 +243,14 @@ public final class SamplePromotionTool {
         return List.copyOf(strokes);
     }
 
-    private static double requiredFinite(JsonObject point, String field) {
+    private static double requiredFinite(JsonObject point, String field, String context) {
         JsonElement value = point.get(field);
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
-            throw new IllegalArgumentException("Missing numeric point field: " + field);
+            throw new IllegalArgumentException(context + "." + field + " must be numeric");
         }
         double result = value.getAsDouble();
         if (!Double.isFinite(result)) {
-            throw new IllegalArgumentException("Non-finite point field: " + field);
+            throw new IllegalArgumentException(context + "." + field + " must be finite");
         }
         return result;
     }

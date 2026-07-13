@@ -8,7 +8,7 @@ import com.maxello1.whamagic.magic.SymbolRecognitionRules;
 import java.util.List;
 import java.util.Objects;
 
-/** Fully validated template definition used to build recognizer-specific state. */
+/** Parsed template definition used to build recognizer-specific state. */
 record DictionaryTemplate(
         String semanticId,
         String templateId,
@@ -25,7 +25,9 @@ record DictionaryTemplate(
         templateId = Objects.requireNonNull(templateId, "templateId");
         displayName = Objects.requireNonNull(displayName, "displayName");
         kind = Objects.requireNonNull(kind, "kind");
-        strokes = strokes.stream().map(List::copyOf).toList();
+        strokes = Objects.requireNonNull(strokes, "strokes").stream()
+                .map(List::copyOf)
+                .toList();
         recognitionRules = Objects.requireNonNull(recognitionRules, "recognitionRules");
     }
 }

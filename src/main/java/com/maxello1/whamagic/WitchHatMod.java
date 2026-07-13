@@ -1,24 +1,34 @@
 package com.maxello1.whamagic;
 
+import com.maxello1.whamagic.config.WhaServerConfig;
+import com.maxello1.whamagic.item.InkWandItem;
+import com.maxello1.whamagic.item.SpellPaperItem;
+import com.maxello1.whamagic.magic.SpellStackUpdater;
+import com.maxello1.whamagic.magic.StoredSpell;
+import com.maxello1.whamagic.network.OpenSpellScreenPayload;
+import com.maxello1.whamagic.network.SaveSpellPayload;
+import com.maxello1.whamagic.parser.Point;
+import com.maxello1.whamagic.parser.SpellDictionary;
+import com.maxello1.whamagic.parser.SpellParser;
 import net.fabricmc.api.ModInitializer;
-import net.minecraft.world.item.Item;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.core.Registry;
-import net.minecraft.resources.Identifier;
-import net.minecraft.resources.ResourceKey;
-import net.minecraft.core.registries.Registries;
-import net.minecraft.core.component.DataComponentType;
-import com.mojang.serialization.Codec;
-import net.minecraft.network.codec.ByteBufCodecs;
+import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import com.maxello1.whamagic.network.SaveSpellPayload;
-import com.maxello1.whamagic.network.OpenSpellScreenPayload;
+import net.minecraft.core.Registry;
+import net.minecraft.core.component.DataComponentType;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.CreativeModeTabs;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.maxello1.whamagic.item.SpellPaperItem;
-import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
-import net.minecraft.world.item.CreativeModeTabs;
+
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -27,24 +37,34 @@ public class WitchHatMod implements ModInitializer {
     public static final String MOD_ID = "wha-magic";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-    private static final Map<UUID, Long> parseCooldowns = new ConcurrentHashMap<>();
+    private static final Map<UUID, Long> PARSE_COOLDOWNS = new ConcurrentHashMap<>();
 
-    public static final ResourceKey<Item> SPELL_PAPER_KEY = ResourceKey.create(Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "spell_paper"));
-    public static final Item SPELL_PAPER = new SpellPaperItem(new Item.Properties().setId(SPELL_PAPER_KEY).stacksTo(1));
+    public static final ResourceKey<Item> SPELL_PAPER_KEY = ResourceKey.create(
+            Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "spell_paper"));
+    public static final Item SPELL_PAPER = new SpellPaperItem(
+            new Item.Properties().setId(SPELL_PAPER_KEY).stacksTo(1));
 
-    public static final ResourceKey<Item> INK_WAND_KEY = ResourceKey.create(Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "ink_wand"));
-    public static final Item INK_WAND = new com.maxello1.whamagic.item.InkWandItem(new Item.Properties().setId(INK_WAND_KEY).stacksTo(1));
+    public static final ResourceKey<Item> INK_WAND_KEY = ResourceKey.create(
+            Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "ink_wand"));
+    public static final Item INK_WAND = new InkWandItem(
+            new Item.Properties().setId(INK_WAND_KEY).stacksTo(1));
 
-    public static final DataComponentType<com.maxello1.whamagic.magic.StoredSpell> STORED_SPELL_COMPONENT = Registry.register(
-        BuiltInRegistries.DATA_COMPONENT_TYPE,
-        Identifier.fromNamespaceAndPath(MOD_ID, "stored_spell"),
-        new DataComponentType.Builder<com.maxello1.whamagic.magic.StoredSpell>().persistent(com.maxello1.whamagic.magic.StoredSpell.CODEC).networkSynchronized(com.maxello1.whamagic.magic.StoredSpell.STREAM_CODEC).build()
+    public static final DataComponentType<StoredSpell> STORED_SPELL_COMPONENT = Registry.register(
+            BuiltInRegistries.DATA_COMPONENT_TYPE,
+            Identifier.fromNamespaceAndPath(MOD_ID, "stored_spell"),
+            new DataComponentType.Builder<StoredSpell>()
+                    .persistent(StoredSpell.CODEC)
+                    .networkSynchronized(StoredSpell.STREAM_CODEC)
+                    .build()
     );
 
-    public static final DataComponentType<java.util.List<java.util.List<com.maxello1.whamagic.parser.Point>>> STROKES_COMPONENT = Registry.register(
-        BuiltInRegistries.DATA_COMPONENT_TYPE,
-        Identifier.fromNamespaceAndPath(MOD_ID, "strokes"),
-        new DataComponentType.Builder<java.util.List<java.util.List<com.maxello1.whamagic.parser.Point>>>().persistent(com.maxello1.whamagic.parser.Point.STROKES_CODEC).networkSynchronized(com.maxello1.whamagic.parser.Point.STROKES_STREAM_CODEC).build()
+    public static final DataComponentType<List<List<Point>>> STROKES_COMPONENT = Registry.register(
+            BuiltInRegistries.DATA_COMPONENT_TYPE,
+            Identifier.fromNamespaceAndPath(MOD_ID, "strokes"),
+            new DataComponentType.Builder<List<List<Point>>>()
+                    .persistent(Point.STROKES_CODEC)
+                    .networkSynchronized(Point.STROKES_STREAM_CODEC)
+                    .build()
     );
 
     @Override
@@ -57,63 +77,59 @@ public class WitchHatMod implements ModInitializer {
             content.accept(INK_WAND);
         });
 
-        // Load Config
-        com.maxello1.whamagic.config.WhaServerConfig.load();
+        WhaServerConfig.load();
 
-        // Networking
-        net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry.serverboundPlay().register(SaveSpellPayload.ID, SaveSpellPayload.CODEC);
-        net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry.clientboundPlay().register(OpenSpellScreenPayload.ID, OpenSpellScreenPayload.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(SaveSpellPayload.ID, SaveSpellPayload.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(OpenSpellScreenPayload.ID, OpenSpellScreenPayload.CODEC);
         
         ServerPlayNetworking.registerGlobalReceiver(SaveSpellPayload.ID, (payload, context) -> {
             context.server().execute(() -> {
-                net.minecraft.world.InteractionHand usedHand = payload.hand();
-                net.minecraft.world.item.ItemStack stack = context.player().getItemInHand(usedHand);
+                ServerPlayer player = context.player();
+                InteractionHand usedHand = payload.hand();
+                ItemStack stack = player.getItemInHand(usedHand);
                 
                 if (!stack.is(SPELL_PAPER)) {
-                    LOGGER.warn("Player {} is not holding spell paper.", context.player().getName().getString());
+                    LOGGER.warn("Player {} is not holding spell paper.", player.getName().getString());
                     return;
                 }
 
-                // Verify Ink Wand
-                boolean hasWand = false;
-                for (int i = 0; i < context.player().getInventory().getContainerSize(); i++) {
-                    if (context.player().getInventory().getItem(i).is(INK_WAND)) {
-                        hasWand = true;
-                        break;
-                    }
-                }
-                if (!hasWand && !context.player().getAbilities().instabuild) {
-                    LOGGER.warn("Player {} tried to save a spell without an Ink Wand.", context.player().getName().getString());
+                if (!hasInkWand(player) && !player.getAbilities().instabuild) {
+                    LOGGER.warn("Player {} tried to save a spell without an Ink Wand.",
+                            player.getName().getString());
                     return;
                 }
 
                 long currentTick = context.server().getTickCount();
-                long lastTick = parseCooldowns.getOrDefault(context.player().getUUID(), 0L);
-                if (currentTick - lastTick < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.parseCooldownTicks) {
-                    LOGGER.warn("Player {} is parsing spells too frequently.", context.player().getName().getString());
+                long lastTick = PARSE_COOLDOWNS.getOrDefault(player.getUUID(), 0L);
+                if (currentTick - lastTick < WhaServerConfig.INSTANCE.network.parseCooldownTicks) {
+                    LOGGER.warn("Player {} is parsing spells too frequently.", player.getName().getString());
                     return;
                 }
-                parseCooldowns.put(context.player().getUUID(), currentTick);
+                PARSE_COOLDOWNS.put(player.getUUID(), currentTick);
 
-                LOGGER.info("Spell drawn packet received, parsing on server...");
+                LOGGER.debug("Parsing submitted spell for {}", player.getName().getString());
                 
-                // Parse the strokes server-side for authority
-                com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(payload.strokes());
-                net.minecraft.world.item.ItemStack newStack = stack.copy();
+                SpellParser.ParseResult result = SpellParser.parse(payload.strokes());
+                ItemStack newStack = stack.copy();
                 applyParseResultToStack(newStack, result, payload.strokes());
-                context.player().setItemInHand(usedHand, newStack);
-                context.player().getInventory().setChanged();
-                if (context.player() instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
-                    serverPlayer.inventoryMenu.broadcastChanges();
-                }
-                LOGGER.info("Item updated in hand.");
+                player.setItemInHand(usedHand, newStack);
+                player.getInventory().setChanged();
+                player.inventoryMenu.broadcastChanges();
             });
         });
 
-        // Load spell dictionary templates
-        com.maxello1.whamagic.parser.SpellDictionary.ensureLoaded();
+        SpellDictionary.ensureLoaded();
 
-        LOGGER.info("Witch Hat Atelier mod initialized!");
+        LOGGER.info("WHA Magic initialized");
+    }
+
+    private static boolean hasInkWand(ServerPlayer player) {
+        for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+            if (player.getInventory().getItem(slot).is(INK_WAND)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -122,10 +138,10 @@ public class WitchHatMod implements ModInitializer {
      * so both the network handler and tests exercise the same production code path.
      */
     public static void applyParseResultToStack(
-            net.minecraft.world.item.ItemStack stack,
-            com.maxello1.whamagic.parser.SpellParser.ParseResult result,
-            java.util.List<java.util.List<com.maxello1.whamagic.parser.Point>> strokes) {
-        com.maxello1.whamagic.magic.SpellStackUpdater.applyParseResultToStack(
+            ItemStack stack,
+            SpellParser.ParseResult result,
+            List<List<Point>> strokes) {
+        SpellStackUpdater.applyParseResultToStack(
                 stack, result, strokes, STORED_SPELL_COMPONENT, STROKES_COMPONENT);
     }
 }

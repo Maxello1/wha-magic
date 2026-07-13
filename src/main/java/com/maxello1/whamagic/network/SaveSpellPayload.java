@@ -1,6 +1,7 @@
 package com.maxello1.whamagic.network;
 
 import com.maxello1.whamagic.WitchHatMod;
+import com.maxello1.whamagic.config.WhaServerConfig;
 import com.maxello1.whamagic.parser.Point;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -15,7 +16,9 @@ public record SaveSpellPayload(
         InteractionHand hand,
         List<List<Point>> strokes
 ) implements CustomPacketPayload {
-    public static final CustomPacketPayload.Type<SaveSpellPayload> ID = new CustomPacketPayload.Type<>(Identifier.fromNamespaceAndPath(WitchHatMod.MOD_ID, "save_spell"));
+    public static final CustomPacketPayload.Type<SaveSpellPayload> ID =
+            new CustomPacketPayload.Type<>(Identifier.fromNamespaceAndPath(
+                    WitchHatMod.MOD_ID, "save_spell"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, SaveSpellPayload> CODEC = new StreamCodec<>() {
         @Override
@@ -27,7 +30,7 @@ public record SaveSpellPayload(
             InteractionHand hand = InteractionHand.values()[handId];
 
             int numStrokes = buf.readInt();
-            if (numStrokes > com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxStrokes) {
+            if (numStrokes > WhaServerConfig.INSTANCE.network.maxStrokes) {
                 throw new IllegalArgumentException("Too many strokes: " + numStrokes);
             }
             if (numStrokes < 0) {
@@ -39,7 +42,7 @@ public record SaveSpellPayload(
 
             for (int i = 0; i < numStrokes; i++) {
                 int numPoints = buf.readInt();
-                if (numPoints > com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxPointsPerStroke) {
+                if (numPoints > WhaServerConfig.INSTANCE.network.maxPointsPerStroke) {
                     throw new IllegalArgumentException("Too many points in stroke: " + numPoints);
                 }
                 if (numPoints < 2) {
@@ -47,7 +50,7 @@ public record SaveSpellPayload(
                 }
 
                 totalPoints += numPoints;
-                if (totalPoints > com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxTotalPoints) {
+                if (totalPoints > WhaServerConfig.INSTANCE.network.maxTotalPoints) {
                     throw new IllegalArgumentException("Too many total points: " + totalPoints);
                 }
 
@@ -56,7 +59,7 @@ public record SaveSpellPayload(
                     double x = buf.readDouble();
                     double y = buf.readDouble();
                     
-                    if (Double.isNaN(x) || Double.isNaN(y) || Double.isInfinite(x) || Double.isInfinite(y)) {
+                    if (!Double.isFinite(x) || !Double.isFinite(y)) {
                         throw new IllegalArgumentException("Invalid coordinates: " + x + ", " + y);
                     }
                     if (x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0) {

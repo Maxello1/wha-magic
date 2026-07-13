@@ -1,12 +1,16 @@
 package com.maxello1.whamagic.magic;
 
-import java.util.Map;
+import net.minecraft.resources.Identifier;
+
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.ArrayList;
+import java.util.Map;
 import java.util.stream.Collectors;
 
-public class SpellCompiler {
+public final class SpellCompiler {
+    private SpellCompiler() {}
+
     public static SpellIr compile(GlyphAst ast) {
         return compile(ast, true);
     }
@@ -37,12 +41,19 @@ public class SpellCompiler {
 
     private static SpellIr compileComplete(GlyphAst ast) {
         if (ast.ring() == null) {
-            String msg = (ast.sigils() != null && !ast.sigils().isEmpty()) ? "Drafting: " + ast.sigils().get(0).id().getPath() : "Drafting: Needs Ring";
-            return new SpellIr(SpellState.INVALID, GlyphWarning.MISSING_RING, List.of(), Map.of(), null, List.of(), "", msg);
+            String message = ast.sigils().isEmpty()
+                    ? "Drafting: Needs Ring"
+                    : "Drafting: " + ast.sigils().get(0).id().getPath();
+            return new SpellIr(
+                    SpellState.INVALID, GlyphWarning.MISSING_RING,
+                    List.of(), Map.of(), null, List.of(), "", message);
         }
         
-        if (ast.sigils() == null || ast.sigils().isEmpty()) {
-            return new SpellIr(SpellState.INVALID, GlyphWarning.MISSING_CORE_SIGIL, List.of(), Map.of(), null, List.of(), "", "Drafting: Missing Core Sigil");
+        if (ast.sigils().isEmpty()) {
+            return new SpellIr(
+                    SpellState.INVALID, GlyphWarning.MISSING_CORE_SIGIL,
+                    List.of(), Map.of(), null, List.of(), "",
+                    "Drafting: Missing Core Sigil");
         }
         
         List<ElementType> elements = new ArrayList<>();
@@ -73,21 +84,19 @@ public class SpellCompiler {
             warning = GlyphWarning.WEAK_RING;
         }
         
-        Map<net.minecraft.resources.Identifier, Integer> signCounts = new LinkedHashMap<>();
+        Map<Identifier, Integer> signCounts = new LinkedHashMap<>();
         List<SignSemantic> signSemantics = new ArrayList<>();
         boolean invalidSigns = false;
         
-        if (ast.signs() != null) {
-            for (RecognizedSign sign : ast.signs()) {
-                if (sign.semantic() != null) {
-                    net.minecraft.resources.Identifier signId = net.minecraft.resources.Identifier.tryParse(sign.id());
-                    if (signId != null) {
-                        signCounts.put(signId, signCounts.getOrDefault(signId, 0) + 1);
-                    }
-                    signSemantics.add(sign.semantic());
-                } else {
-                    invalidSigns = true;
+        for (RecognizedSign sign : ast.signs()) {
+            if (sign.semantic() != null) {
+                Identifier signId = Identifier.tryParse(sign.id());
+                if (signId != null) {
+                    signCounts.merge(signId, 1, Integer::sum);
                 }
+                signSemantics.add(sign.semantic());
+            } else {
+                invalidSigns = true;
             }
         }
         
@@ -95,12 +104,20 @@ public class SpellCompiler {
             warning = GlyphWarning.INVALID_SIGNS;
         }
 
-        boolean hasAmbiguousInk = ast.unknownInk().stream()
-                .anyMatch(ink -> ink.classification() == UnknownInkClassification.AMBIGUOUS);
-        boolean hasSubstantialUnknownInk = ast.unknownInk().stream()
-                .anyMatch(ink -> ink.classification() == UnknownInkClassification.SUBSTANTIAL_UNKNOWN);
-        boolean hasBudgetSkippedInk = ast.unknownInk().stream()
-                .anyMatch(ink -> ink.classification() == UnknownInkClassification.BUDGET_SKIPPED);
+        boolean hasAmbiguousInk = false;
+        boolean hasSubstantialUnknownInk = false;
+        boolean hasBudgetSkippedInk = false;
+        for (ClassifiedUnknownInk ink : ast.unknownInk()) {
+            UnknownInkClassification classification = ink.classification();
+            if (classification == null) continue;
+            switch (classification) {
+                case AMBIGUOUS -> hasAmbiguousInk = true;
+                case SUBSTANTIAL_UNKNOWN -> hasSubstantialUnknownInk = true;
+                case BUDGET_SKIPPED -> hasBudgetSkippedInk = true;
+                default -> {
+                }
+            }
+        }
         if (hasAmbiguousInk || hasSubstantialUnknownInk || hasBudgetSkippedInk) {
             state = SpellState.INVALID;
             warning = hasAmbiguousInk
@@ -117,19 +134,20 @@ public class SpellCompiler {
                 .collect(Collectors.joining(", ")) + "]";
         }
         
-        String statusPrefix = "";
-        switch (state) {
-            case ACTIVE: statusPrefix = "Active: "; break;
-            case PREPARED: statusPrefix = "Prepared: "; break;
-            case DRAFT: statusPrefix = "Drafting: "; break;
-            case INVALID: statusPrefix = "Invalid: "; break;
-        }
+        String statusPrefix = switch (state) {
+            case ACTIVE -> "Active: ";
+            case PREPARED -> "Prepared: ";
+            case DRAFT -> "Drafting: ";
+            case INVALID -> "Invalid: ";
+        };
         
         String statusMessage = statusPrefix + displayName;
         if (warning != null) {
             statusMessage += " (" + warning.name() + ")";
         }
         
-        return new SpellIr(state, warning, elements, signCounts, primarySemantic, signSemantics, displayName, statusMessage);
+        return new SpellIr(
+                state, warning, elements, signCounts, primarySemantic,
+                signSemantics, displayName, statusMessage);
     }
 }

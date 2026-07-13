@@ -1,14 +1,23 @@
 package com.maxello1.whamagic.parser;
 
+import com.maxello1.whamagic.magic.CandidateGenerationSettings;
+import com.maxello1.whamagic.magic.ClassifiedUnknownInk;
+import com.maxello1.whamagic.magic.GlyphAst;
+import com.maxello1.whamagic.magic.RecognitionRejectionReason;
+import com.maxello1.whamagic.magic.RingDetector;
+import com.maxello1.whamagic.magic.SpellCompiler;
+import com.maxello1.whamagic.magic.SpellIr;
+import com.maxello1.whamagic.magic.UnknownInkClassification;
+import com.maxello1.whamagic.magic.UnknownSymbol;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
 
-import com.maxello1.whamagic.magic.*;
+public final class SpellParser {
+    private SpellParser() {}
 
-public class SpellParser {
-
-    public static class ParseResult {
+    public static final class ParseResult {
         public final GlyphAst ast;
         public final SpellIr ir;
         public final SegmentationDebugResult debugResult;
@@ -37,7 +46,7 @@ public class SpellParser {
     /** Parse with explicit candidate and recognition limits, primarily for deterministic tests. */
     public static ParseResult parse(List<List<Point>> strokes, CandidateGenerationSettings settings) {
         if (strokes == null || strokes.isEmpty()) {
-            GlyphAst emptyAst = new GlyphAst(null, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+            GlyphAst emptyAst = new GlyphAst(null, List.of(), List.of(), List.of());
             return new ParseResult(emptyAst, SpellCompiler.compile(emptyAst));
         }
 
@@ -53,9 +62,11 @@ public class SpellParser {
             }
         }
 
-        CandidateGenerator.GenerationResult genResult = CandidateGenerator.generateCandidates(nonRingStrokes, ring, settings);
+        CandidateGenerator.GenerationResult genResult =
+                CandidateGenerator.generateCandidates(nonRingStrokes, ring, settings);
 
-        SelectionEngine.SelectedSymbols selection = SelectionEngine.select(genResult.candidates(), ring, settings.maxRecognitionCalls());
+        SelectionEngine.SelectedSymbols selection = SelectionEngine.select(
+                genResult.candidates(), ring, settings.maxRecognitionCalls());
 
         // Anything not owned by a selected symbol/unknown remains visible as dropped
         // input. Ring strokes are intentionally excluded, and ring-prefiltered strokes

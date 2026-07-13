@@ -39,8 +39,7 @@ public final class SpellDictionary {
     private static final ResourceSource CLASSPATH_RESOURCES =
             path -> SpellDictionary.class.getResourceAsStream(path);
 
-    private static volatile boolean loaded;
-    private static volatile ActiveState active = ActiveState.empty();
+    private static volatile ActiveState active = ActiveState.unloaded();
 
     private SpellDictionary() {}
 
@@ -76,6 +75,7 @@ public final class SpellDictionary {
     }
 
     private record ActiveState(
+            boolean loaded,
             DictionarySnapshot snapshot,
             List<PointCloudRecognizer.PointCloudTemplate> pointCloudTemplates,
             List<RasterRecognizer.RasterTemplate> rasterTemplates
@@ -85,8 +85,9 @@ public final class SpellDictionary {
             rasterTemplates = List.copyOf(rasterTemplates);
         }
 
-        private static ActiveState empty() {
+        private static ActiveState unloaded() {
             return new ActiveState(
+                    false,
                     new DictionarySnapshot(DICTIONARY_VERSION, "unloaded", List.of()),
                     List.of(), List.of());
         }
@@ -104,12 +105,11 @@ public final class SpellDictionary {
 
     /** Load once. The active snapshot changes only after complete validation succeeds. */
     public static void ensureLoaded() {
-        if (loaded) return;
+        if (active.loaded()) return;
         synchronized (LOAD_LOCK) {
-            if (loaded) return;
+            if (active.loaded()) return;
             ActiveState candidate = buildSnapshot(CLASSPATH_RESOURCES);
             active = candidate;
-            loaded = true;
             logLoaded(candidate);
         }
     }
@@ -124,13 +124,12 @@ public final class SpellDictionary {
         synchronized (LOAD_LOCK) {
             ActiveState candidate = buildSnapshot(source);
             active = candidate;
-            loaded = true;
             logLoaded(candidate);
         }
     }
 
     public static boolean isLoaded() {
-        return loaded;
+        return active.loaded();
     }
 
     public static DictionarySnapshot snapshot() {
@@ -184,7 +183,7 @@ public final class SpellDictionary {
                     DICTIONARY_VERSION,
                     dictionaryHash(sigilBytes, signBytes),
                     identities);
-            return new ActiveState(metadata, pointCloud, raster);
+            return new ActiveState(true, metadata, pointCloud, raster);
         } catch (DictionaryLoadException exception) {
             throw exception;
         } catch (Exception exception) {

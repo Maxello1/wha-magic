@@ -1,19 +1,27 @@
 package com.maxello1.whamagic.item;
 
+import com.maxello1.whamagic.WitchHatMod;
+import com.maxello1.whamagic.magic.SpellExecutionService;
+import com.maxello1.whamagic.magic.SpellState;
+import com.maxello1.whamagic.magic.StoredSpell;
+import com.maxello1.whamagic.network.OpenSpellScreenPayload;
+import com.maxello1.whamagic.parser.Point;
+import com.maxello1.whamagic.parser.SpellParser;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.InteractionHand;
-import net.minecraft.world.InteractionResult;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.item.TooltipFlag;
-import java.util.List;
+import net.minecraft.world.item.component.TooltipDisplay;
+import net.minecraft.world.level.Level;
+
 import java.util.ArrayList;
-import com.maxello1.whamagic.WitchHatMod;
-import com.maxello1.whamagic.network.OpenSpellScreenPayload;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.network.chat.Component;
+import java.util.List;
+import java.util.function.Consumer;
 
 public class SpellPaperItem extends Item {
     public SpellPaperItem(Properties properties) {
@@ -23,13 +31,13 @@ public class SpellPaperItem extends Item {
     @Override
     public InteractionResult use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
-        java.util.List<java.util.List<com.maxello1.whamagic.parser.Point>> strokes = stack.get(WitchHatMod.STROKES_COMPONENT);
+        List<List<Point>> strokes = stack.get(WitchHatMod.STROKES_COMPONENT);
         
         if (strokes != null && !strokes.isEmpty()) {
-            com.maxello1.whamagic.parser.SpellParser.ParseResult result = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
-            if (result.ir.valid() && result.ir.state() == com.maxello1.whamagic.magic.SpellState.ACTIVE) {
+            SpellParser.ParseResult result = SpellParser.parse(strokes);
+            if (result.ir.valid() && result.ir.state() == SpellState.ACTIVE) {
                 if (!level.isClientSide()) {
-                    com.maxello1.whamagic.magic.SpellExecutionService.execute(level, player, result.ir);
+                    SpellExecutionService.execute(level, player, result.ir);
                     if (!player.getAbilities().instabuild) {
                         stack.shrink(1);
                     }
@@ -39,26 +47,30 @@ public class SpellPaperItem extends Item {
         }
         
         if (!level.isClientSide()) {
-            boolean hasWand = false;
-            for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
-                if (player.getInventory().getItem(i).getItem() instanceof InkWandItem) {
-                    hasWand = true;
-                    break;
-                }
-            }
-            
-            if (hasWand || player.getAbilities().instabuild) {
-                ServerPlayNetworking.send((ServerPlayer) player, new OpenSpellScreenPayload(hand, strokes == null ? new ArrayList<>() : strokes));
+            if (hasInkWand(player) || player.getAbilities().instabuild) {
+                List<List<Point>> existingStrokes = strokes == null ? new ArrayList<>() : strokes;
+                ServerPlayNetworking.send(
+                        (ServerPlayer) player,
+                        new OpenSpellScreenPayload(hand, existingStrokes));
             } else {
-                player.sendSystemMessage(net.minecraft.network.chat.Component.literal("§cYou need an Ink Wand to draw spells."));
+                player.sendSystemMessage(Component.literal("§cYou need an Ink Wand to draw spells."));
             }
         }
         return InteractionResult.SUCCESS;
     }
 
+    private static boolean hasInkWand(Player player) {
+        for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+            if (player.getInventory().getItem(slot).getItem() instanceof InkWandItem) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public Component getName(ItemStack stack) {
-        com.maxello1.whamagic.magic.StoredSpell spell = stack.get(WitchHatMod.STORED_SPELL_COMPONENT);
+        StoredSpell spell = stack.get(WitchHatMod.STORED_SPELL_COMPONENT);
         if (spell != null && spell.displayName() != null && !spell.displayName().isEmpty()) {
             String name = spell.displayName();
             String capitalized = name.substring(0, 1).toUpperCase() + name.substring(1);
@@ -67,11 +79,17 @@ public class SpellPaperItem extends Item {
         return super.getName(stack);
     }
 
+    @SuppressWarnings("deprecation")
     @Override
-    public void appendHoverText(ItemStack stack, Item.TooltipContext context, net.minecraft.world.item.component.TooltipDisplay display, java.util.function.Consumer<Component> tooltipComponents, TooltipFlag tooltipFlag) {
-        com.maxello1.whamagic.magic.StoredSpell spell = stack.get(WitchHatMod.STORED_SPELL_COMPONENT);
+    public void appendHoverText(
+            ItemStack stack,
+            Item.TooltipContext context,
+            TooltipDisplay display,
+            Consumer<Component> tooltipComponents,
+            TooltipFlag tooltipFlag) {
+        StoredSpell spell = stack.get(WitchHatMod.STORED_SPELL_COMPONENT);
         if (spell != null && spell.displayName() != null && !spell.displayName().isEmpty()) {
-            String prefix = spell.state() == com.maxello1.whamagic.magic.SpellState.ACTIVE ? "§aActive: " : "§dPrepared: ";
+            String prefix = spell.state() == SpellState.ACTIVE ? "§aActive: " : "§dPrepared: ";
             tooltipComponents.accept(Component.literal(prefix + spell.displayName()));
         } else {
             tooltipComponents.accept(Component.literal("§7Empty Spell Paper"));

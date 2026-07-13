@@ -70,6 +70,45 @@ public class SamplePromotionToolTest {
         assertEquals("holdout", readJson(output).get("sampleRole").getAsString());
     }
 
+    @Test
+    void previewOnlyOptionIsAcceptedBeforeOrAfterTheSamplePath() {
+        Path sample = Path.of("recorded.json");
+
+        SamplePromotionTool.CommandLine after = SamplePromotionTool.parseCommandLine(
+                new String[]{sample.toString(), "--preview-only"});
+        SamplePromotionTool.CommandLine before = SamplePromotionTool.parseCommandLine(
+                new String[]{"--preview-only", sample.toString()});
+        SamplePromotionTool.CommandLine prompted = SamplePromotionTool.parseCommandLine(
+                new String[]{"--preview-only"});
+
+        assertEquals(sample, after.input());
+        assertTrue(after.previewOnly());
+        assertEquals(after, before);
+        assertNull(prompted.input());
+        assertTrue(prompted.previewOnly());
+        assertThrows(IllegalArgumentException.class, () -> SamplePromotionTool.parseCommandLine(
+                new String[]{"--preview-only", "--preview-only"}));
+        assertThrows(IllegalArgumentException.class, () -> SamplePromotionTool.parseCommandLine(
+                new String[]{sample.toString(), "other.json"}));
+    }
+
+    @Test
+    void malformedPointErrorIncludesItsStrokeAndPointIndex() throws Exception {
+        Path input = temporaryDirectory.resolve("malformed.json");
+        JsonObject recorded = recordedSample();
+        recorded.getAsJsonArray("rawStrokes")
+                .get(0).getAsJsonArray()
+                .get(0).getAsJsonObject()
+                .remove("y");
+        writeJson(input, recorded);
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> SamplePromotionTool.preview(input));
+
+        assertEquals("rawStrokes[0][0].y must be numeric", exception.getMessage());
+    }
+
     private static JsonObject recordedSample() {
         JsonObject root = new JsonObject();
         root.addProperty("formatVersion", 3);

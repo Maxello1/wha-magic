@@ -12,7 +12,14 @@
  */
 package com.maxello1.whamagic.parser;
 
+import com.maxello1.whamagic.magic.RecognitionAlternative;
+import com.maxello1.whamagic.magic.RecognitionRejectionReason;
+import com.maxello1.whamagic.magic.SigilSemantic;
+import com.maxello1.whamagic.magic.SignSemantic;
+import com.maxello1.whamagic.magic.SymbolKind;
 import com.maxello1.whamagic.magic.SymbolRecognitionResult;
+import com.maxello1.whamagic.magic.SymbolRecognitionRules;
+import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,8 +38,8 @@ import java.util.Map;
  * 3. Measures pixel-level overlap using Dice coefficients and region grid analysis.
  * 4. Combines ink overlap with structural features (stroke count, aspect ratio, stroke profiles).
  *
- * This approach is practically immune to minor handwriting variations and scales perfectly
- * because it measures visual space instead of mathematical point distance.
+ * Comparing normalized ink masks makes the matcher tolerant of small handwriting
+ * variations while keeping the scoring independent of the source drawing scale.
  */
 public class RasterRecognizer {
 
@@ -46,14 +53,11 @@ public class RasterRecognizer {
     private static final int REGION_GRID_SIZE = 10;
     private static final double MIN_CONFIDENCE = 0.48;
     private static final double AMBIGUITY_GAP = 0.035;
-    // Phase 2 acceptance gates
+    // Acceptance gates
     private static final double MIN_TEMPLATE_COVERAGE_SIGIL = 0.35;
     private static final double MIN_TEMPLATE_COVERAGE_SIGN = 0.25;
     private static final double MAX_UNEXPLAINED_INK_SIGIL = 0.55;
     private static final double MAX_UNEXPLAINED_INK_SIGN = 0.65;
-    private static final double MIN_COMPLEXITY_COMPAT = 0.15;
-    private static final double MIN_DIMENSION_RATIO_SIGIL = 0.12;
-    private static final double MIN_DIMENSION_RATIO_SIGN = 0.05;
 
     // ---- Data Structures ----
 
@@ -61,20 +65,18 @@ public class RasterRecognizer {
         private final String semanticId;
         private final String templateId;
         private final String displayName;
-        private final com.maxello1.whamagic.magic.SymbolKind kind;
+        private final SymbolKind kind;
         private final String element;
-        private final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
-        private final com.maxello1.whamagic.magic.SignSemantic signSemantic;
-        private final List<List<Point>> rawStrokes;
+        private final SigilSemantic sigilSemantic;
+        private final SignSemantic signSemantic;
         private final InkLayers ink;
         private final TemplateFeatures features;
-        private final com.maxello1.whamagic.magic.TemplateComplexity complexity;
-        private final com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules;
+        private final SymbolRecognitionRules recognitionRules;
 
         private RasterTemplate(String semanticId, String templateId, String displayName,
-                              com.maxello1.whamagic.magic.SymbolKind kind, String element, List<List<Point>> strokes,
-                              com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem,
-                              com.maxello1.whamagic.magic.SymbolRecognitionRules rules) {
+                              SymbolKind kind, String element, List<List<Point>> strokes,
+                              SigilSemantic sigilSem, SignSemantic signSem,
+                              SymbolRecognitionRules rules) {
             this.semanticId = semanticId;
             this.templateId = templateId;
             this.displayName = displayName;
@@ -83,9 +85,9 @@ public class RasterRecognizer {
             this.sigilSemantic = sigilSem;
             this.signSemantic = signSem;
             this.recognitionRules = rules != null ? rules :
-                    (kind == com.maxello1.whamagic.magic.SymbolKind.SIGIL
-                            ? com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGIL_DEFAULTS
-                            : com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGN_DEFAULTS);
+                    (kind == SymbolKind.SIGIL
+                            ? SymbolRecognitionRules.SIGIL_DEFAULTS
+                            : SymbolRecognitionRules.SIGN_DEFAULTS);
             
             // Filter out 1-point decoration markers
             List<List<Point>> filteredStrokes = new ArrayList<>();
@@ -96,16 +98,14 @@ public class RasterRecognizer {
             }
             
             // Re-merge contiguous fragments left by SVG tracer
-            this.rawStrokes = mergeFragmentedStrokes(filteredStrokes);
+            List<List<Point>> rawStrokes = mergeFragmentedStrokes(filteredStrokes);
 
-            TemplateNormalizer.NormalizedResult norm = TemplateNormalizer.normalize(this.rawStrokes, SAMPLES_PER_STROKE);
+            TemplateNormalizer.NormalizedResult norm = TemplateNormalizer.normalize(rawStrokes, SAMPLES_PER_STROKE);
             this.ink = renderInk(norm.strokes);
-            this.features = extractTemplateFeatures(this.rawStrokes, norm);
-            this.complexity = computeTemplateComplexity(norm, this.ink, this.rawStrokes);
+            this.features = extractTemplateFeatures(rawStrokes, norm, this.ink);
             
-            LOGGER.debug("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}, complexity.pathLen={}",
-                    templateId, this.rawStrokes.size(), norm.sourceAspectRatio, this.ink.coreInk,
-                    String.format("%.3f", this.complexity.pathLength()));
+            LOGGER.debug("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}",
+                    templateId, rawStrokes.size(), norm.sourceAspectRatio, this.ink.coreInk);
         }
 
         private static List<List<Point>> mergeFragmentedStrokes(List<List<Point>> strokes) {
@@ -216,10 +216,10 @@ public class RasterRecognizer {
      *
      * Returns a recognizer-neutral result with the top 5 alternatives and diagnostics.
      */
-    public static SymbolRecognitionResult recognize(List<List<Point>> strokes, com.maxello1.whamagic.magic.SymbolKind expectedKind) {
+    public static SymbolRecognitionResult recognize(List<List<Point>> strokes, SymbolKind expectedKind) {
         if (strokes == null || strokes.isEmpty()) {
             return SymbolRecognitionResult.rejected("No strokes",
-                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES,
+                    RecognitionRejectionReason.NO_STROKES,
                     MIN_CONFIDENCE);
         }
 
@@ -227,7 +227,7 @@ public class RasterRecognizer {
         TemplateNormalizer.NormalizedResult candidateNorm = TemplateNormalizer.normalize(strokes, SAMPLES_PER_STROKE);
         if (candidateNorm.strokes.isEmpty()) {
             return SymbolRecognitionResult.rejected("No valid strokes",
-                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES,
+                    RecognitionRejectionReason.NO_STROKES,
                     MIN_CONFIDENCE);
         }
 
@@ -256,7 +256,7 @@ public class RasterRecognizer {
             double countScore = strokeCountCompatibility(candidateStrokeCount, template.features.strokeCount);
             double profileScore = profileCompatibility(candidateProfile, template.features.strokeProfile);
 
-            // Phase 4 supplementary features (used for disambiguation, not primary score)
+            // Supplementary features used for disambiguation, not primary scoring.
             double directionScore = directionHistogramCompatibility(candidateDirectionHist, template.features.directionHistogram);
             double regionalScore = regionalDistributionCompatibility(candidateRegionalDist, template.features.regionalDistribution);
 
@@ -279,17 +279,19 @@ public class RasterRecognizer {
                 confidence = Math.min(confidence, cap);
             }
 
-            LOGGER.debug("  vs '{}': ink={} explained={} covered={} dice={} struct={} (aspect={} count={} profile={}) -> conf={}",
-                    template.templateId,
-                    String.format("%.3f", inkScores.inkScore),
-                    String.format("%.3f", inkScores.candidateExplainedRatio),
-                    String.format("%.3f", inkScores.templateCoveredRatio),
-                    String.format("%.3f", inkScores.softDiceScore),
-                    String.format("%.3f", structuralScore),
-                    String.format("%.3f", aspectScore),
-                    String.format("%.3f", countScore),
-                    String.format("%.3f", profileScore),
-                    String.format("%.3f", confidence));
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("  vs '{}': ink={} explained={} covered={} dice={} struct={} (aspect={} count={} profile={}) -> conf={}",
+                        template.templateId,
+                        String.format("%.3f", inkScores.inkScore),
+                        String.format("%.3f", inkScores.candidateExplainedRatio),
+                        String.format("%.3f", inkScores.templateCoveredRatio),
+                        String.format("%.3f", inkScores.softDiceScore),
+                        String.format("%.3f", structuralScore),
+                        String.format("%.3f", aspectScore),
+                        String.format("%.3f", countScore),
+                        String.format("%.3f", profileScore),
+                        String.format("%.3f", confidence));
+            }
 
             scored.add(new ScoredAlternative(template, confidence, structuralScore,
                     inkScores.templateCoveredRatio, inkScores.candidateExplainedRatio,
@@ -298,7 +300,7 @@ public class RasterRecognizer {
 
         if (scored.isEmpty()) {
             return SymbolRecognitionResult.rejected("No templates",
-                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_TEMPLATES,
+                    RecognitionRejectionReason.NO_TEMPLATES,
                     MIN_CONFIDENCE);
         }
 
@@ -320,12 +322,12 @@ public class RasterRecognizer {
         double gap = secondScore >= 0 ? best.confidence - secondScore : best.confidence;
 
         // Build top 5 alternatives
-        List<com.maxello1.whamagic.magic.RecognitionAlternative> alternatives = new ArrayList<>();
+        List<RecognitionAlternative> alternatives = new ArrayList<>();
         int altCount = Math.min(5, semanticScores.size());
         for (int i = 0; i < altCount; i++) {
             ScoredAlternative alt = semanticScores.get(i);
-            alternatives.add(new com.maxello1.whamagic.magic.RecognitionAlternative(
-                    net.minecraft.resources.Identifier.tryParse(alt.template.semanticId),
+            alternatives.add(new RecognitionAlternative(
+                    Identifier.tryParse(alt.template.semanticId),
                     alt.template.displayName,
                     alt.template.kind,
                     alt.confidence,
@@ -338,15 +340,15 @@ public class RasterRecognizer {
             ));
         }
 
-        // Phase 2: Multi-gate acceptance
+        // Apply the acceptance gates to the best semantic match.
         boolean ambiguous = gap < AMBIGUITY_GAP && secondScore >= 0;
-        boolean isSigil = expectedKind == com.maxello1.whamagic.magic.SymbolKind.SIGIL;
-        com.maxello1.whamagic.magic.SymbolRecognitionRules rules = best.template.recognitionRules;
+        boolean isSigil = expectedKind == SymbolKind.SIGIL;
+        SymbolRecognitionRules rules = best.template.recognitionRules;
 
         // Gate 1: Minimum confidence
-        com.maxello1.whamagic.magic.RecognitionRejectionReason reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE;
+        RecognitionRejectionReason reason = RecognitionRejectionReason.NONE;
         if (best.confidence < MIN_CONFIDENCE) {
-            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.SCORE_BELOW_THRESHOLD;
+            reason = RecognitionRejectionReason.SCORE_BELOW_THRESHOLD;
         }
         // Gate 2: Ambiguity gap — but allow structural score to resolve ties
         else if (ambiguous) {
@@ -362,30 +364,30 @@ public class RasterRecognizer {
                 }
             }
             if (!structurallyResolved) {
-                reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.AMBIGUOUS_TOP_MATCHES;
+                reason = RecognitionRejectionReason.AMBIGUOUS_TOP_MATCHES;
             }
         }
         // Gate 3: Template coverage — candidate must cover enough of the template
         else if (best.templateCoverage < (isSigil ? MIN_TEMPLATE_COVERAGE_SIGIL : MIN_TEMPLATE_COVERAGE_SIGN)) {
-            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.LOW_TEMPLATE_COVERAGE;
+            reason = RecognitionRejectionReason.LOW_TEMPLATE_COVERAGE;
         }
         // Gate 4: Unexplained ink — candidate must not have too much extra ink
         else if (best.unexplainedInkRatio > (isSigil ? MAX_UNEXPLAINED_INK_SIGIL : MAX_UNEXPLAINED_INK_SIGN)) {
-            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.EXCESS_UNEXPLAINED_INK;
+            reason = RecognitionRejectionReason.EXCESS_UNEXPLAINED_INK;
         }
         // Gate 5: Dimensionality — reject line-like candidates for templates that don't allow it
         else if (!rules.allowLineLike()) {
             double candDimensionality = computeCandidateDimensionality(strokes);
             if (candDimensionality < rules.minimumDimensionRatio()) {
-                reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.INSUFFICIENT_GEOMETRY;
+                reason = RecognitionRejectionReason.INSUFFICIENT_GEOMETRY;
             }
         }
         // Gate 6: Structural score — candidate topology must loosely match template
-        if (reason == com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE && best.structuralScore < 0.45) {
-            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.INSUFFICIENT_GEOMETRY;
+        if (reason == RecognitionRejectionReason.NONE && best.structuralScore < 0.45) {
+            reason = RecognitionRejectionReason.INSUFFICIENT_GEOMETRY;
         }
 
-        boolean recognized = reason == com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE;
+        boolean recognized = reason == RecognitionRejectionReason.NONE;
         String displayName = recognized ? best.template.displayName
                 : best.template.displayName + " (" + String.format("%.0f%%", best.confidence * 100) + ")";
 
@@ -496,7 +498,6 @@ public class RasterRecognizer {
         double templateCoveredRatio;
         double softDiceScore;
         double unexplainedInkRatio;
-        double missingInkRatio;
         double requiredCellCoverage;
         double forbiddenCellInkRatio;
     }
@@ -507,7 +508,6 @@ public class RasterRecognizer {
         if (candidate.coreInk == 0 || reference.coreInk == 0) {
             scores.inkScore = 0;
             scores.unexplainedInkRatio = 1;
-            scores.missingInkRatio = 1;
             scores.forbiddenCellInkRatio = 1;
             return scores;
         }
@@ -523,8 +523,6 @@ public class RasterRecognizer {
                 candidate.softInk, reference.softInk);
 
         scores.unexplainedInkRatio = clamp(1 - scores.candidateExplainedRatio);
-        scores.missingInkRatio = clamp(1 - scores.templateCoveredRatio);
-
         // Region grid analysis
         byte[] candidateCoreCells = occupiedCells(candidate.coreMask);
         byte[] candidateLooseCells = occupiedCells(candidate.looseMask);
@@ -591,14 +589,14 @@ public class RasterRecognizer {
 
     // ---- Structural Features ----
 
-    private static TemplateFeatures extractTemplateFeatures(List<List<Point>> rawStrokes, TemplateNormalizer.NormalizedResult norm) {
+    private static TemplateFeatures extractTemplateFeatures(List<List<Point>> rawStrokes,
+                                                            TemplateNormalizer.NormalizedResult norm,
+                                                            InkLayers ink) {
         double aspect = norm.sourceAspectRatio;
         int strokeCount = rawStrokes.size();
         double[] profile = computeStrokeProfile(rawStrokes);
         double[] directionHist = computeDirectionHistogram(norm.strokes);
-        // Regional distribution computed from template ink at load time
-        InkLayers tempInk = renderInk(norm.strokes);
-        double[] regionalDist = computeRegionalDistribution(tempInk.coreMask);
+        double[] regionalDist = computeRegionalDistribution(ink.coreMask);
         return new TemplateFeatures(aspect, strokeCount, profile, directionHist, regionalDist);
     }
 
@@ -750,43 +748,6 @@ public class RasterRecognizer {
 
     private static double clamp(double v, double min, double max) {
         return Math.max(min, Math.min(max, v));
-    }
-
-    /** Compute template complexity profile at registration time. */
-    private static com.maxello1.whamagic.magic.TemplateComplexity computeTemplateComplexity(
-            TemplateNormalizer.NormalizedResult norm, InkLayers ink, List<List<Point>> rawStrokes) {
-        // Total path length of normalized strokes
-        double totalPath = 0;
-        for (List<Point> stroke : norm.strokes) {
-            totalPath += pathLength(stroke);
-        }
-
-        // Ink coverage: fraction of the 40x40 grid covered
-        double inkCoverage = (double) ink.softInk / (INK_SIZE * INK_SIZE);
-
-        // Dimensionality: min(w,h) / max(w,h) of the bounding box
-        double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE;
-        double minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
-        for (List<Point> stroke : rawStrokes) {
-            for (Point p : stroke) {
-                minX = Math.min(minX, p.x);
-                maxX = Math.max(maxX, p.x);
-                minY = Math.min(minY, p.y);
-                maxY = Math.max(maxY, p.y);
-            }
-        }
-        double w = maxX - minX;
-        double h = maxY - minY;
-        double dimensionality = (w > 0 && h > 0) ? Math.min(w, h) / Math.max(w, h) : 0;
-
-        // Endpoint estimate: 2 endpoints per stroke
-        int endpointEstimate = rawStrokes.size() * 2;
-
-        // Component estimate: number of distinct stroke groups
-        int componentEstimate = rawStrokes.size();
-
-        return new com.maxello1.whamagic.magic.TemplateComplexity(
-                totalPath, inkCoverage, dimensionality, endpointEstimate, componentEstimate);
     }
 
     /** Compute dimensionality (min/max dimension ratio) of candidate strokes. */
