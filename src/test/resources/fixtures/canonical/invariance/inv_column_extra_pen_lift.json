@@ -1,0 +1,5 @@
+{"formatVersion": 2, "name": "inv_column_extra_pen_lift", "sampleRole": "canonical_invariance", "expectedIntent": {"sigils": [], "signs": ["column"]}, "expectRing": false, "expectValidSpell": false, "notes": "Invariance: the Column upright is split by one extra pen lift.", "strokes": [
+  [{"x":0.5,"y":0.12},{"x":0.5,"y":0.2},{"x":0.5,"y":0.3},{"x":0.5,"y":0.4},{"x":0.5,"y":0.5}],
+  [{"x":0.5,"y":0.5},{"x":0.5,"y":0.6},{"x":0.5,"y":0.7},{"x":0.5,"y":0.8}],
+  [{"x":0.18,"y":0.8},{"x":0.3,"y":0.8},{"x":0.4,"y":0.8},{"x":0.5,"y":0.8},{"x":0.6,"y":0.8},{"x":0.7,"y":0.8},{"x":0.82,"y":0.8}]
+]}

@@ -40,12 +40,12 @@ public class SpellDrawingScreen extends Screen {
     public SpellDrawingScreen(InteractionHand hand, List<List<Point>> existingStrokes) {
         super(Component.literal("Draw Spell"));
         this.hand = hand;
+        // Existing strokes are parsed immediately, so templates must be ready first.
+        SpellDictionary.ensureLoaded();
         if (existingStrokes != null) {
             this.strokes.addAll(existingStrokes);
             reparse();
         }
-        // Ensure dictionary is loaded on the client
-        SpellDictionary.ensureLoaded();
     }
 
     @Override
@@ -338,10 +338,23 @@ public class SpellDrawingScreen extends Screen {
         int unknownCount = debug.unknowns() != null ? debug.unknowns().size() : 0;
         
         // Summary line
+        StringBuilder limitStatus = new StringBuilder();
+        if (debug.ringBudgetExhausted()) limitStatus.append(" [RING LIMIT]");
+        if (debug.candidateLimitReached()) limitStatus.append(" [CANDIDATE LIMIT]");
+        if (debug.recognitionBudgetExhausted()) {
+            limitStatus.append(" [CALL LIMIT +")
+                    .append(debug.unevaluatedCandidateCount())
+                    .append(" UNEVALUATED]");
+        }
+        if (!debug.droppedSourceStrokeIndices().isEmpty()) {
+            limitStatus.append(" [DROPPED ")
+                    .append(debug.droppedSourceStrokeIndices().size())
+                    .append(']');
+        }
         graphics.text(this.font, String.format("Candidates: %d | Selected: %d | Calls: %d | Unknowns: %d%s",
                 debug.candidateCount(), debug.selectedCandidateCount(),
                 debug.recognitionCalls(), unknownCount,
-                debug.candidateLimitReached() ? " [LIMIT]" : ""),
+                limitStatus),
                 10, 82, 0xFFFFFF00);
         
         // === VERBOSE: Primitive group boxes (blue) ===
@@ -453,6 +466,16 @@ public class SpellDrawingScreen extends Screen {
             int infoY = 94;
             graphics.text(this.font, "Prim groups: " + debug.primitiveGroupCount(), 10, infoY, 0xFF88CCFF);
             infoY += 10;
+            graphics.text(this.font, String.format("Ring work: %d combos / %d fits / %.3f ms | strokes=%s",
+                    debug.ringCombinationsConsidered(), debug.ringFitsAttempted(),
+                    debug.ringElapsedNanos() / 1_000_000.0, debug.ringStrokeIndices()),
+                    10, infoY, 0xFF88CCFF);
+            infoY += 10;
+            if (!debug.droppedSourceStrokeIndices().isEmpty()) {
+                graphics.text(this.font, "Dropped source strokes: " + debug.droppedSourceStrokeIndices(),
+                        10, infoY, 0xFFFFAA55);
+                infoY += 10;
+            }
             for (int i = 0; i < Math.min(8, debug.allEvaluated().size()); i++) {
                 var eval = debug.allEvaluated().get(i);
                 String evalText = String.format("Cand#%d: sigil=%.0f%% sign=%.0f%% strokes=%s",

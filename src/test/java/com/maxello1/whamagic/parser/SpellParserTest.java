@@ -4,6 +4,10 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.maxello1.whamagic.magic.CandidateGenerationSettings;
+import com.maxello1.whamagic.magic.GlyphWarning;
+import com.maxello1.whamagic.magic.RingDetector;
+import com.maxello1.whamagic.magic.SpellState;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -14,7 +18,9 @@ import java.io.File;
 import java.io.FileReader;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -46,6 +52,152 @@ public class SpellParserTest {
         int templateCount = com.maxello1.whamagic.parser.RasterRecognizer.getTemplateCount();
         assertTrue(templateCount > 0, "Dictionary should have loaded templates");
         assertEquals(8, templateCount, "Expected 5 sigils + 3 signs = 8 templates");
+    }
+
+    @Test
+    public void completeLightPreservesOriginalSourceStrokeIndices() throws Exception {
+        List<List<Point>> strokes = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/multi/spell_light_complete.json"));
+
+        SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+        assertEquals(List.of(0), result.debugResult.ringStrokeIndices());
+        var light = result.ast.sigils().stream()
+                .filter(sigil -> sigil.id() != null && "light".equals(sigil.id().getPath()))
+                .findFirst().orElseThrow(() -> new AssertionError("Complete Light must be recognized"));
+        assertEquals(Set.of(1, 2, 3, 4, 5, 6), new HashSet<>(light.sourceStrokeIndices()));
+
+        result.debugResult.primitiveGroups().forEach(group ->
+                assertTrue(group.sourceStrokeIndices().stream().allMatch(index -> index >= 1 && index <= 6),
+                        "Primitive groups must use original non-ring indices: " + group.sourceStrokeIndices()));
+        result.debugResult.generatedCandidates().forEach(candidate ->
+                assertTrue(candidate.sourceStrokeIndices().stream().allMatch(index -> index >= 1 && index <= 6),
+                        "Candidates must use original non-ring indices: " + candidate.sourceStrokeIndices()));
+    }
+
+    @Test
+    public void recognizedSignsPreserveOriginalNonRingIndices() throws Exception {
+        List<List<Point>> strokes = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/multi/spell_earth_levitation_x2.json"));
+
+        SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+        assertFalse(result.ast.signs().isEmpty(), "Fixture must recognize its signs");
+        Set<Integer> ringIndices = new HashSet<>(result.debugResult.ringStrokeIndices());
+        result.ast.signs().forEach(sign -> {
+            assertFalse(sign.sourceStrokeIndices().isEmpty(), "Recognized signs must retain source ownership");
+            assertTrue(sign.sourceStrokeIndices().stream().noneMatch(ringIndices::contains),
+                    "Recognized signs must not own the ring stroke");
+            assertTrue(sign.sourceStrokeIndices().stream().allMatch(index -> index >= 0 && index < strokes.size()),
+                    "Recognized signs must use original input indices");
+        });
+    }
+
+    @Test
+    public void candidateLimitExhaustionInvalidatesPartialInterpretation() throws Exception {
+        List<List<Point>> strokes = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/multi/spell_light_complete.json"));
+        SpellParser.ParseResult baseline = SpellParser.parse(strokes);
+        assertTrue(baseline.debugResult.candidateCount() > 1, "Fixture must generate multiple candidates");
+
+        CandidateGenerationSettings limited = withLimits(
+                CandidateGenerationSettings.DEFAULTS.maxPrimitiveGroups(),
+                baseline.debugResult.candidateCount() - 1,
+                CandidateGenerationSettings.DEFAULTS.maxRecognitionCalls());
+        SpellParser.ParseResult result = SpellParser.parse(strokes, limited);
+
+        assertTrue(result.debugResult.candidateLimitReached());
+        assertEquals(SpellState.INVALID, result.ir.state());
+        assertEquals(GlyphWarning.INCOMPLETE_RECOGNITION, result.ir.warning());
+        assertFalse(result.ir.valid(), "An incomplete candidate search must fail closed in the IR");
+    }
+
+    @Test
+    public void recognitionBudgetExhaustionInvalidatesAndExactBudgetDoesNot() throws Exception {
+        List<List<Point>> strokes = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/multi/spell_light_complete.json"));
+        SpellParser.ParseResult baseline = SpellParser.parse(strokes);
+        int exactCalls = baseline.debugResult.recognitionCalls();
+        assertTrue(exactCalls > 0);
+
+        SpellParser.ParseResult exhausted = SpellParser.parse(strokes, withLimits(
+                CandidateGenerationSettings.DEFAULTS.maxPrimitiveGroups(),
+                CandidateGenerationSettings.DEFAULTS.maxCandidates(),
+                exactCalls - 1));
+        assertTrue(exhausted.debugResult.recognitionBudgetExhausted());
+        assertTrue(exhausted.debugResult.unevaluatedCandidateCount() > 0);
+        assertEquals(GlyphWarning.INCOMPLETE_RECOGNITION, exhausted.ir.warning());
+        assertFalse(exhausted.ir.valid(), "An incomplete recognition search must fail closed in the IR");
+
+        SpellParser.ParseResult exact = SpellParser.parse(strokes, withLimits(
+                CandidateGenerationSettings.DEFAULTS.maxPrimitiveGroups(),
+                CandidateGenerationSettings.DEFAULTS.maxCandidates(),
+                exactCalls));
+        assertFalse(exact.debugResult.recognitionBudgetExhausted(),
+                "Using the final available call is not exhaustion when no work is skipped");
+        assertEquals(0, exact.debugResult.unevaluatedCandidateCount());
+        assertTrue(exact.ir.valid());
+    }
+
+    @Test
+    public void ringBudgetExhaustionInvalidatesTheCompiledResult() throws Exception {
+        List<Point> circle = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/ring_shapes/ring_clean_circle.json"))
+                .get(0);
+        List<List<Point>> strokes = new ArrayList<>();
+        for (int i = 0; i < RingDetector.RingSearchSettings.DEFAULTS.maxEligibleStrokes() + 1; i++) {
+            strokes.add(new ArrayList<>(circle));
+        }
+
+        SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+        assertTrue(result.debugResult.ringBudgetExhausted());
+        assertEquals(SpellState.INVALID, result.ir.state());
+        assertEquals(GlyphWarning.INCOMPLETE_RECOGNITION, result.ir.warning());
+        assertFalse(result.ir.valid(), "An incomplete ring search must never produce castable IR");
+    }
+
+    @Test
+    public void primitiveTruncationReportsDroppedOriginalIndices() {
+        List<IndexedStroke> strokes = List.of(
+                new IndexedStroke(4, List.of(new Point(0.10, 0.10), new Point(0.35, 0.10))),
+                new IndexedStroke(9, List.of(new Point(0.75, 0.75), new Point(0.90, 0.75))));
+
+        CandidateGenerator.GenerationResult result = CandidateGenerator.generateCandidates(
+                strokes, null, withLimits(1, 128, 512));
+
+        assertTrue(result.candidateLimitReached());
+        assertEquals(List.of(9), result.droppedSourceStrokeIndices());
+        assertEquals(List.of(4), result.primitiveGroups().get(0).sourceStrokeIndices());
+    }
+
+    @Test
+    public void exactCandidateCapWithoutOmittedCandidateIsNotExhaustion() {
+        List<IndexedStroke> strokes = List.of(
+                new IndexedStroke(7, List.of(new Point(0.20, 0.20), new Point(0.40, 0.40))));
+
+        CandidateGenerator.GenerationResult result = CandidateGenerator.generateCandidates(
+                strokes, null, withLimits(16, 1, 512));
+
+        assertEquals(1, result.candidates().size());
+        assertFalse(result.candidateLimitReached());
+    }
+
+    @Test
+    public void discardableNoiseIsReportedWithoutBecomingUnknown() throws Exception {
+        List<List<Point>> strokes = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/multi/spell_messy_multi.json"));
+
+        SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+        assertTrue(result.debugResult.droppedSourceStrokeIndices().contains(13),
+                "The fixture's final micro-stroke must be reported as dropped noise");
+        assertTrue(result.ast.unknownSymbols().stream()
+                        .noneMatch(unknown -> unknown.sourceStrokeIndices().contains(13)),
+                "Discarded noise must not become an UnknownSymbol");
+        assertFalse(result.debugResult.ringBudgetExhausted());
+        assertFalse(result.debugResult.candidateLimitReached());
+        assertFalse(result.debugResult.recognitionBudgetExhausted());
     }
 
     private static Stream<File> fixtureFiles() {
@@ -137,5 +289,34 @@ public class SpellParserTest {
                 assertTrue(anyHasAlternatives, "At least one candidate must have non-empty alternatives");
             }
         }
+    }
+
+    private static CandidateGenerationSettings withLimits(
+            int maxPrimitiveGroups, int maxCandidates, int maxRecognitionCalls) {
+        CandidateGenerationSettings defaults = CandidateGenerationSettings.DEFAULTS;
+        return new CandidateGenerationSettings(
+                maxPrimitiveGroups,
+                defaults.maxGroupsPerCandidate(),
+                maxCandidates,
+                maxRecognitionCalls,
+                defaults.maxCandidateWidthRatio(),
+                defaults.maxCandidateHeightRatio(),
+                defaults.maxAngularSpanDeg(),
+                defaults.maxInternalGapRatio(),
+                defaults.maxEmptySpaceRatio());
+    }
+
+    private static List<List<Point>> loadStrokes(File file) throws Exception {
+        JsonObject json = GSON.fromJson(new FileReader(file), JsonObject.class);
+        List<List<Point>> strokes = new ArrayList<>();
+        for (JsonElement strokeElement : json.getAsJsonArray("strokes")) {
+            List<Point> stroke = new ArrayList<>();
+            for (JsonElement pointElement : strokeElement.getAsJsonArray()) {
+                JsonObject point = pointElement.getAsJsonObject();
+                stroke.add(new Point(point.get("x").getAsDouble(), point.get("y").getAsDouble()));
+            }
+            strokes.add(stroke);
+        }
+        return strokes;
     }
 }

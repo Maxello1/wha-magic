@@ -5,6 +5,7 @@ import com.maxello1.whamagic.magic.PrimitiveStrokeGroup;
 import com.maxello1.whamagic.magic.SymbolCandidate;
 import com.maxello1.whamagic.magic.RingDetector;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.HashSet;
@@ -15,19 +16,26 @@ public class CandidateGenerator {
     public record GenerationResult(
         List<PrimitiveStrokeGroup> primitiveGroups,
         List<SymbolCandidate> candidates,
-        boolean candidateLimitReached
+        boolean candidateLimitReached,
+        List<Integer> droppedSourceStrokeIndices
     ) {}
 
-    public static GenerationResult generateCandidates(List<List<Point>> strokes, RingDetector.RingGlyph ring, CandidateGenerationSettings settings) {
+    public static GenerationResult generateCandidates(List<IndexedStroke> strokes, RingDetector.RingGlyph ring, CandidateGenerationSettings settings) {
         List<PrimitiveStrokeGroup> primitives = groupPrimitives(strokes, ring, settings);
-        
+
+        boolean limitReached = false;
+        List<Integer> droppedSourceStrokeIndices = new ArrayList<>();
         if (primitives.size() > settings.maxPrimitiveGroups()) {
             primitives.sort((a, b) -> Double.compare(b.pathLength(), a.pathLength()));
+            for (PrimitiveStrokeGroup dropped : primitives.subList(settings.maxPrimitiveGroups(), primitives.size())) {
+                droppedSourceStrokeIndices.addAll(dropped.sourceStrokeIndices());
+            }
             primitives = new ArrayList<>(primitives.subList(0, settings.maxPrimitiveGroups()));
+            limitReached = true;
         }
-        
+
+        Collections.sort(droppedSourceStrokeIndices);
         List<SymbolCandidate> candidates = new ArrayList<>();
-        boolean limitReached = false;
         int n = primitives.size();
         
         // Insert the all-strokes super-candidate FIRST so it is always tested.
@@ -36,7 +44,11 @@ public class CandidateGenerator {
             SymbolCandidate allStrokesCandidate = buildCandidate(new ArrayList<>(primitives), ring, 0)
                     .withSuperCandidate();
             if (isValidSuperCandidate(allStrokesCandidate, ring)) {
-                candidates.add(allStrokesCandidate);
+                if (candidates.size() < settings.maxCandidates()) {
+                    candidates.add(allStrokesCandidate);
+                } else {
+                    limitReached = true;
+                }
             }
         }
         
@@ -44,28 +56,29 @@ public class CandidateGenerator {
         boolean[][] adjacentGroups = buildGroupAdjacency(primitives, ring, settings);
         
         int maxK = Math.min(n, settings.maxGroupsPerCandidate());
+        candidateSearch:
         for (int k = 1; k <= maxK; k++) {
             List<List<PrimitiveStrokeGroup>> combos = new ArrayList<>();
             generateConnectedCombinations(primitives, adjacentGroups, k, 0, new ArrayList<>(), new HashSet<>(), combos);
             for (List<PrimitiveStrokeGroup> combo : combos) {
-                if (candidates.size() >= settings.maxCandidates()) {
-                    limitReached = true;
-                    break;
-                }
+                // Skip if it duplicates the all-strokes candidate.
+                if (n > 1 && combo.size() == primitives.size()) continue;
+
                 SymbolCandidate cand = buildCandidate(combo, ring, candidates.size());
                 if (isValidCandidate(cand, ring, settings)) {
-                    // Skip if it duplicates the all-strokes candidate
-                    if (n > 1 && combo.size() == primitives.size()) continue;
+                    // Equality with the cap is not exhaustion. The search becomes
+                    // incomplete only when a valid candidate must be omitted.
+                    if (candidates.size() >= settings.maxCandidates()) {
+                        limitReached = true;
+                        break candidateSearch;
+                    }
                     candidates.add(cand);
                 }
             }
-            if (candidates.size() >= settings.maxCandidates()) {
-                limitReached = true;
-                break;
-            }
         }
-        
-        return new GenerationResult(primitives, candidates, limitReached);
+
+        return new GenerationResult(primitives, candidates, limitReached,
+                List.copyOf(droppedSourceStrokeIndices));
     }
     
     /**
@@ -186,7 +199,7 @@ public class CandidateGenerator {
      * Uses limited connectivity: strokes are grouped only if they are directly close,
      * with a limit on how far transitive grouping can extend.
      */
-    private static List<PrimitiveStrokeGroup> groupPrimitives(List<List<Point>> strokes, RingDetector.RingGlyph ring, CandidateGenerationSettings settings) {
+    private static List<PrimitiveStrokeGroup> groupPrimitives(List<IndexedStroke> strokes, RingDetector.RingGlyph ring, CandidateGenerationSettings settings) {
         if (strokes.isEmpty()) return new ArrayList<>();
         
         int n = strokes.size();
@@ -201,8 +214,8 @@ public class CandidateGenerator {
         boolean[][] connected = new boolean[n][n];
         for (int i = 0; i < n; i++) {
             for (int j = i + 1; j < n; j++) {
-                List<Point> s1 = strokes.get(i);
-                List<Point> s2 = strokes.get(j);
+                List<Point> s1 = strokes.get(i).points();
+                List<Point> s2 = strokes.get(j).points();
                 
                 if (checkStrokeProximity(s1, s2, directThreshSq)) {
                     connected[i][j] = true;
@@ -265,7 +278,7 @@ public class CandidateGenerator {
      * This prevents transitive merging from combining distant strokes that happen to be
      * connected through a chain of intermediary strokes.
      */
-    private static List<List<Integer>> maybeSplitComponent(List<Integer> comp, List<List<Point>> strokes, double maxSpan) {
+    private static List<List<Integer>> maybeSplitComponent(List<Integer> comp, List<IndexedStroke> strokes, double maxSpan) {
         if (comp.size() <= 1) {
             List<List<Integer>> result = new ArrayList<>();
             result.add(comp);
@@ -276,7 +289,7 @@ public class CandidateGenerator {
         double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE;
         double minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
         for (int idx : comp) {
-            for (Point p : strokes.get(idx)) {
+            for (Point p : strokes.get(idx).points()) {
                 minX = Math.min(minX, p.x);
                 maxX = Math.max(maxX, p.x);
                 minY = Math.min(minY, p.y);
@@ -302,7 +315,7 @@ public class CandidateGenerator {
         
         for (int idx : comp) {
             double centroid = 0;
-            List<Point> s = strokes.get(idx);
+            List<Point> s = strokes.get(idx).points();
             for (Point p : s) {
                 centroid += splitX ? p.x : p.y;
             }
@@ -330,7 +343,7 @@ public class CandidateGenerator {
     }
     
     /** Build a PrimitiveStrokeGroup from a list of stroke indices. */
-    private static PrimitiveStrokeGroup buildPrimitiveGroup(int groupId, List<Integer> indices, List<List<Point>> strokes, RingDetector.RingGlyph ring) {
+    private static PrimitiveStrokeGroup buildPrimitiveGroup(int groupId, List<Integer> indices, List<IndexedStroke> strokes, RingDetector.RingGlyph ring) {
         List<List<Point>> groupStrokes = new ArrayList<>();
         List<Integer> sourceIndices = new ArrayList<>();
         double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE;
@@ -340,8 +353,9 @@ public class CandidateGenerator {
         double pathLength = 0;
         
         for (int idx : indices) {
-            List<Point> s = strokes.get(idx);
-            sourceIndices.add(idx);
+            IndexedStroke indexedStroke = strokes.get(idx);
+            List<Point> s = indexedStroke.points();
+            sourceIndices.add(indexedStroke.originalIndex());
             groupStrokes.add(s);
             
             for (int pIdx = 0; pIdx < s.size(); pIdx++) {

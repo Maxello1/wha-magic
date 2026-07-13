@@ -8,6 +8,34 @@ import java.util.stream.Collectors;
 
 public class SpellCompiler {
     public static SpellIr compile(GlyphAst ast) {
+        return compile(ast, true);
+    }
+
+    /**
+     * Compile an AST and fail closed when any bounded recognition search was incomplete.
+     * The partial interpretation is retained for diagnostics, but can never be saved or cast.
+     */
+    public static SpellIr compile(GlyphAst ast, boolean recognitionComplete) {
+        SpellIr result = compileComplete(ast);
+        if (recognitionComplete) {
+            return result;
+        }
+
+        String detail = result.displayName() == null || result.displayName().isEmpty()
+                ? "Incomplete recognition search"
+                : result.displayName() + " (incomplete recognition search)";
+        return new SpellIr(
+                SpellState.INVALID,
+                GlyphWarning.INCOMPLETE_RECOGNITION,
+                result.elements(),
+                result.signCounts(),
+                result.sigilSemantic(),
+                result.signSemantics(),
+                result.displayName(),
+                "Invalid: " + detail);
+    }
+
+    private static SpellIr compileComplete(GlyphAst ast) {
         if (ast.ring() == null) {
             String msg = (ast.sigils() != null && !ast.sigils().isEmpty()) ? "Drafting: " + ast.sigils().get(0).id().getPath() : "Drafting: Needs Ring";
             return new SpellIr(SpellState.INVALID, GlyphWarning.MISSING_RING, List.of(), Map.of(), null, List.of(), "", msg);

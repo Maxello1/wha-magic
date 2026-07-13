@@ -22,6 +22,14 @@ public class SelectionEngine {
     
     /** Minimum margin by which a super-candidate must beat sub-candidates to be preferred. */
     static final double SUPER_CANDIDATE_WIN_MARGIN = 0.05;
+
+    /**
+     * Deterministic quarter-turn orientations for signs. The candidate's angular
+     * position supplies its drawing-specific base rotation; additional 15/30/45
+     * degree probes duplicated tolerant point-cloud work and exhausted canonical Wind.
+     */
+    private static final double[] STANDALONE_SIGN_ROTATION_OFFSETS = {0, 90, 180, 270};
+    private static final double[] RING_SIGN_ROTATION_OFFSETS = {0, 90, 180, 270, 15, -15, 30, -30, 45, -45};
     
     public record SelectedSymbols(
         List<RecognizedSigil> sigils,
@@ -29,7 +37,9 @@ public class SelectionEngine {
         List<UnknownSymbol> unknowns,
         List<SymbolCandidate> selectedCandidates,
         int recognitionCalls,
-        List<EvaluatedCandidate> allEvaluated
+        List<EvaluatedCandidate> allEvaluated,
+        boolean recognitionBudgetExhausted,
+        int unevaluatedCandidateCount
     ) {}
     
     public static SelectedSymbols select(List<SymbolCandidate> candidates, RingDetector.RingGlyph ring, int maxCalls) {
@@ -38,11 +48,13 @@ public class SelectionEngine {
         double MIN_PATH_LENGTH = 0.10; // minimum path length as fraction of canvas
         int MIN_POINT_COUNT = 4;       // minimum total points
         double MIN_DIMENSION = 0.07;   // minimum width or height
+        boolean recognitionBudgetExhausted = false;
+        int unevaluatedCandidateCount = 0;
         
         List<EvaluatedCandidate> evaluated = new ArrayList<>();
         
-        for (SymbolCandidate cand : candidates) {
-            if (calls >= maxCalls) break;
+        for (int candidateIndex = 0; candidateIndex < candidates.size(); candidateIndex++) {
+            SymbolCandidate cand = candidates.get(candidateIndex);
             
             // Phase 2: Early noise rejection — skip recognition for obvious noise
             if (isNoise(cand, MIN_PATH_LENGTH, MIN_POINT_COUNT, MIN_DIMENSION)) {
@@ -61,6 +73,17 @@ public class SelectionEngine {
             // Overlap zone (0.25-0.85) and standalone candidates (no ring, position 0) test as both.
             boolean likelySigil = cand.radialPosition() < 0.85;
             boolean likelySign = cand.radialPosition() > 0.25 || cand.radialPosition() < 0.05;
+            double[] signRotationOffsets = ring == null
+                    ? STANDALONE_SIGN_ROTATION_OFFSETS
+                    : RING_SIGN_ROTATION_OFFSETS;
+
+            int requiredCalls = (likelySigil ? 1 : 0)
+                    + (likelySign ? signRotationOffsets.length : 0);
+            if (requiredCalls > maxCalls - calls) {
+                recognitionBudgetExhausted = true;
+                unevaluatedCandidateCount = candidates.size() - candidateIndex;
+                break;
+            }
             
             RasterRecognizer.RecognitionResult sigilRes = null;
             double sigilScore = 0;
@@ -83,11 +106,9 @@ public class SelectionEngine {
             double bestAngle = 0;
             
             // Optimization: skip sign rotation tests for clearly central candidates
-            if (likelySign && calls < maxCalls) {
+            if (likelySign) {
                 double baseAngle = cand.angularPosition();
-                double[] offsets = {0, 90, 180, 270, 15, -15, 30, -30, 45, -45};
-                for (double offset : offsets) {
-                    if (calls >= maxCalls) break;
+                for (double offset : signRotationOffsets) {
                     double angleToTest = (baseAngle + offset) % 360;
                     if (angleToTest < 0) angleToTest += 360;
                     
@@ -292,7 +313,8 @@ public class SelectionEngine {
                             eval.cand.angularPosition(),
                             eval.bestAngle,
                             "sign",
-                            res.signSemantic
+                            res.signSemantic,
+                            eval.cand.sourceStrokeIndices()
                         ));
                     }
                 } else {
@@ -316,7 +338,8 @@ public class SelectionEngine {
             }
         }
         
-        return new SelectedSymbols(outSigils, outSigns, outUnknowns, selectedCandidates, calls, evaluated);
+        return new SelectedSymbols(outSigils, outSigns, outUnknowns, selectedCandidates, calls, evaluated,
+                recognitionBudgetExhausted, unevaluatedCandidateCount);
     }
     
     /** Build alternatives list from a RecognitionResult, setting the role score. */

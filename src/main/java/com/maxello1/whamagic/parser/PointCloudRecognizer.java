@@ -23,13 +23,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
  * $P Point-Cloud gesture recognizer.
  *
- * Treats all strokes as an unordered cloud of points, making it inherently
- * stroke-order, stroke-direction, and stroke-count independent.
+ * Treats strokes as an unordered cloud of points, making the core distance
+ * stroke-order and stroke-direction independent. Separate structural gates
+ * retain required closed contours and guard unsupported stroke complexity.
  *
  * Two-stage system:
  * <ol>
@@ -46,6 +48,9 @@ public class PointCloudRecognizer implements SymbolRecognizer {
 
     /** Number of resample points. 32 is proven accurate for the current gesture set. */
     public static final int N = 32;
+
+    /** Every meaningful stroke needs both an endpoint and a direction sample. */
+    private static final int MIN_POINTS_PER_MEANINGFUL_STROKE = 2;
 
     /** Controls step size in greedy cloud match. step = floor(N^(1-ε)). */
     private static final double EPSILON = 0.50;
@@ -65,6 +70,12 @@ public class PointCloudRecognizer implements SymbolRecognizer {
     /** Reject a closed candidate when it is far more symmetric than its template. */
     private static final double MIN_ASYMMETRY_RATIO = 0.45;
 
+    /** Endpoint/revisit tolerance used only for topological contour preservation. */
+    private static final double CONTOUR_CONNECTION_RATIO = 0.08;
+
+    /** Ignore tiny loops that do not occupy a meaningful part of the drawing. */
+    private static final double MIN_CONTOUR_AREA_RATIO = 0.015;
+
     // ---- Data Structures ----
 
     /**
@@ -80,6 +91,26 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         }
     }
 
+    /** Point allocation for one meaningful source stroke. */
+    public record StrokePointAllocation(int strokeId, int pointCount) {}
+
+    /**
+     * Immutable diagnostic plan for point-cloud normalization.
+     *
+     * <p>An unsupported plan has no stroke allocations. Callers must reject it
+     * before normalization rather than dropping source strokes to fit {@link #N}.</p>
+     */
+    public record NormalizationAllocation(
+            int targetPointCount,
+            int meaningfulStrokeCount,
+            boolean supported,
+            List<StrokePointAllocation> strokeAllocations
+    ) {
+        public NormalizationAllocation {
+            strokeAllocations = List.copyOf(strokeAllocations);
+        }
+    }
+
     /** A normalized point-cloud template. */
     public static class PointCloudTemplate {
         public final String id;
@@ -88,6 +119,7 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         public final String element;
         public final CloudPoint[] points; // always length N after normalization
         public final int strokeCount; // original number of strokes in the template
+        public final int requiredClosedContourCount;
         public final boolean closedSingleStroke;
         public final double centralSymmetryError;
         public final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
@@ -96,7 +128,8 @@ public class PointCloudRecognizer implements SymbolRecognizer {
 
         public PointCloudTemplate(String id, String displayName,
                                   com.maxello1.whamagic.magic.SymbolKind kind, String element,
-                                  CloudPoint[] points, int strokeCount, boolean closedSingleStroke,
+                                  CloudPoint[] points, int strokeCount, int requiredClosedContourCount,
+                                  boolean closedSingleStroke,
                                   double centralSymmetryError,
                                   com.maxello1.whamagic.magic.SigilSemantic sigilSemantic,
                                   com.maxello1.whamagic.magic.SignSemantic signSemantic,
@@ -107,6 +140,7 @@ public class PointCloudRecognizer implements SymbolRecognizer {
             this.element = element;
             this.points = points;
             this.strokeCount = strokeCount;
+            this.requiredClosedContourCount = requiredClosedContourCount;
             this.closedSingleStroke = closedSingleStroke;
             this.centralSymmetryError = centralSymmetryError;
             this.sigilSemantic = sigilSemantic;
@@ -157,11 +191,19 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                                         com.maxello1.whamagic.magic.SigilSemantic sigilSemantic,
                                         com.maxello1.whamagic.magic.SignSemantic signSemantic,
                                         com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules) {
+        NormalizationAllocation allocation = normalizationAllocation(strokes);
+        if (!allocation.supported()) {
+            throw new IllegalArgumentException("Template '" + id + "' has "
+                    + allocation.meaningfulStrokeCount() + " meaningful strokes; N=" + N
+                    + " supports at most " + (N / MIN_POINTS_PER_MEANINGFUL_STROKE));
+        }
         CloudPoint[] cloud = strokesToCloud(strokes);
         CloudPoint[] normalized = normalize(cloud, N);
+        int requiredClosedContourCount = closedContourCount(strokes);
         boolean closedSingleStroke = isClosedSingleStroke(strokes);
         double symmetryError = closedSingleStroke ? centralSymmetryError(normalized) : 0.0;
         templates.add(new PointCloudTemplate(id, displayName, kind, element, normalized, strokes.size(),
+                requiredClosedContourCount,
                 closedSingleStroke, symmetryError,
                 sigilSemantic, signSemantic, recognitionRules));
         LOGGER.debug("Registered $P template '{}' ({} strokes -> {} points)", id, strokes.size(), N);
@@ -188,6 +230,13 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                     null, null, com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES);
         }
 
+        NormalizationAllocation allocation = normalizationAllocation(strokes);
+        if (!allocation.supported()) {
+            return new RasterRecognizer.RecognitionResult(false, null, "Unknown", null, null, 0,
+                    null, null,
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.UNSUPPORTED_COMPLEXITY);
+        }
+
         // Convert and normalize candidate
         CloudPoint[] candidateCloud = strokesToCloud(strokes);
         if (candidateCloud.length < 3) {
@@ -195,6 +244,7 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                     null, null, com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES);
         }
         CloudPoint[] candidate = normalize(candidateCloud, N);
+        int candidateClosedContourCount = closedContourCount(strokes);
         boolean candidateClosedSingleStroke = isClosedSingleStroke(strokes);
         double candidateSymmetryError = candidateClosedSingleStroke ? centralSymmetryError(candidate) : 0.0;
 
@@ -209,16 +259,26 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                     && candidateSymmetryError < tmpl.centralSymmetryError * MIN_ASYMMETRY_RATIO) {
                 score = 0.0;
             }
-            // Stroke-count completeness check:
-            // 1. Missing strokes: reject strictly. Prevents incomplete symbols (like Light missing a square) from matching.
-            // 2. Too many extra strokes: reject if more than double. Prevents complex drawings from matching simple 1-stroke shapes.
-            // 3. Moderate extra strokes: allow with mild penalty. This is CRITICAL for multi-symbol spells where
+            // Structural completeness and stroke-count safeguards:
+            // 1. Closed templates require all meaningful contours, independent of pen lifts/joins.
+            // 2. Fewer strokes are allowed only when those required contours survive, with a mild penalty.
+            // 3. Too many extra strokes are rejected above double the template count.
+            // 4. Moderate extra strokes receive the existing mild penalty. This is important for multi-symbol spells where
             //    CandidateGenerator might group multiple symbols into a single super-candidate (e.g. 7 wind + 2 column = 9 strokes).
             int candidateStrokeCount = strokes.size();
             int templateStrokeCount = tmpl.strokeCount;
-            if (candidateStrokeCount < templateStrokeCount) {
-                // Missing strokes: strictly reject
+            boolean preservesRequiredClosedContours =
+                    candidateClosedContourCount >= tmpl.requiredClosedContourCount;
+            if (!preservesRequiredClosedContours) {
                 score = 0;
+            } else if (candidateStrokeCount < templateStrokeCount) {
+                if (tmpl.requiredClosedContourCount > 0) {
+                    double ratio = (double) candidateStrokeCount / templateStrokeCount;
+                    score *= Math.pow(ratio, 0.5);
+                } else {
+                    // Open templates still require their full stroke structure.
+                    score = 0;
+                }
             } else if (candidateStrokeCount > templateStrokeCount * 2) {
                 // More than double the strokes: reject (e.g. 5-stroke candidate vs 1-stroke template)
                 score = 0;
@@ -307,6 +367,7 @@ public class PointCloudRecognizer implements SymbolRecognizer {
             }
         }
         if (tmpl == null) return 0;
+        if (!normalizationAllocation(strokes).supported()) return 0;
 
         CloudPoint[] candidateCloud = strokesToCloud(strokes);
         if (candidateCloud.length < 3) return 0;
@@ -411,6 +472,32 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         return cloud.toArray(new CloudPoint[0]);
     }
 
+    /**
+     * Report the exact point allocation normalization would use for these strokes.
+     * Unsupported inputs intentionally have no per-stroke allocation.
+     */
+    public static NormalizationAllocation normalizationAllocation(List<List<Point>> strokes) {
+        List<List<CloudPoint>> strokeGroups = new ArrayList<>();
+        if (strokes != null) {
+            for (int strokeId = 0; strokeId < strokes.size(); strokeId++) {
+                List<CloudPoint> group = new ArrayList<>();
+                List<Point> stroke = strokes.get(strokeId);
+                if (stroke != null) {
+                    for (Point point : stroke) {
+                        group.add(new CloudPoint(point.x, point.y, strokeId));
+                    }
+                }
+                strokeGroups.add(group);
+            }
+        }
+        return createNormalizationAllocation(strokeGroups, N);
+    }
+
+    /** Package-private diagnostic hook used by focused normalization tests. */
+    static CloudPoint[] normalizeForDiagnostics(List<List<Point>> strokes) {
+        return normalize(strokesToCloud(strokes), N);
+    }
+
     /** Full normalization: per-stroke resample to N points, scale, translate centroid to origin. */
     private static CloudPoint[] normalize(CloudPoint[] points, int n) {
         // Group points by strokeId
@@ -470,11 +557,75 @@ public class PointCloudRecognizer implements SymbolRecognizer {
      * This ensures every meaningful stroke receives point representation,
      * even if it is much shorter than other strokes.
      */
-    private static CloudPoint[] resamplePerStroke(List<List<CloudPoint>> strokeGroups, int n) {
-        // Filter out trivial strokes (0-1 points)
+    private static List<List<CloudPoint>> meaningfulStrokeGroups(List<List<CloudPoint>> strokeGroups) {
         List<List<CloudPoint>> meaningful = new ArrayList<>();
         for (List<CloudPoint> group : strokeGroups) {
             if (group.size() >= 2) meaningful.add(group);
+        }
+        return meaningful;
+    }
+
+    private static NormalizationAllocation createNormalizationAllocation(
+            List<List<CloudPoint>> strokeGroups, int n) {
+        List<List<CloudPoint>> meaningful = meaningfulStrokeGroups(strokeGroups);
+        if (meaningful.size() * MIN_POINTS_PER_MEANINGFUL_STROKE > n) {
+            return new NormalizationAllocation(n, meaningful.size(), false, List.of());
+        }
+        if (meaningful.isEmpty()) {
+            return new NormalizationAllocation(n, 0, true, List.of());
+        }
+
+        double[] lengths = new double[meaningful.size()];
+        double totalLength = 0;
+        for (int s = 0; s < meaningful.size(); s++) {
+            lengths[s] = strokePathLength(meaningful.get(s));
+            totalLength += lengths[s];
+        }
+
+        int[] counts = new int[meaningful.size()];
+        int reserved = meaningful.size() * MIN_POINTS_PER_MEANINGFUL_STROKE;
+        int remaining = n - reserved;
+
+        for (int s = 0; s < meaningful.size(); s++) {
+            int proportional = totalLength > 1e-10
+                    ? (int) Math.round((double) remaining * lengths[s] / totalLength)
+                    : remaining / meaningful.size();
+            counts[s] = MIN_POINTS_PER_MEANINGFUL_STROKE + proportional;
+        }
+
+        int total = 0;
+        for (int count : counts) total += count;
+        int diff = n - total;
+        while (diff != 0) {
+            int bestIdx = 0;
+            double bestLen = 0;
+            for (int s = 0; s < meaningful.size(); s++) {
+                if (diff > 0 || counts[s] > MIN_POINTS_PER_MEANINGFUL_STROKE) {
+                    if (lengths[s] > bestLen) {
+                        bestLen = lengths[s];
+                        bestIdx = s;
+                    }
+                }
+            }
+            counts[bestIdx] += (diff > 0) ? 1 : -1;
+            diff += (diff > 0) ? -1 : 1;
+        }
+
+        List<StrokePointAllocation> strokeAllocations = new ArrayList<>(meaningful.size());
+        for (int s = 0; s < meaningful.size(); s++) {
+            strokeAllocations.add(new StrokePointAllocation(
+                    meaningful.get(s).get(0).strokeId(), counts[s]));
+        }
+        return new NormalizationAllocation(n, meaningful.size(), true, strokeAllocations);
+    }
+
+    private static CloudPoint[] resamplePerStroke(List<List<CloudPoint>> strokeGroups, int n) {
+        List<List<CloudPoint>> meaningful = meaningfulStrokeGroups(strokeGroups);
+        NormalizationAllocation allocation = createNormalizationAllocation(strokeGroups, n);
+        if (!allocation.supported()) {
+            throw new IllegalArgumentException("Point-cloud normalization supports at most "
+                    + (n / MIN_POINTS_PER_MEANINGFUL_STROKE) + " meaningful strokes for N=" + n
+                    + ", got " + allocation.meaningfulStrokeCount());
         }
         if (meaningful.isEmpty()) {
             // Degenerate: no meaningful strokes, fill with first point
@@ -486,63 +637,19 @@ public class PointCloudRecognizer implements SymbolRecognizer {
             return result;
         }
 
-        // Compute per-stroke path lengths
-        double[] lengths = new double[meaningful.size()];
-        double totalLength = 0;
-        for (int s = 0; s < meaningful.size(); s++) {
-            lengths[s] = strokePathLength(meaningful.get(s));
-            totalLength += lengths[s];
-        }
-
-        // Assign point counts: minimum 2 per stroke, rest proportional to path length
-        int minPerStroke = 2;
-        int[] counts = new int[meaningful.size()];
-        int reserved = meaningful.size() * minPerStroke;
-        int remaining = Math.max(0, n - reserved);
-
-        for (int s = 0; s < meaningful.size(); s++) {
-            int proportional = totalLength > 1e-10
-                    ? (int) Math.round((double) remaining * lengths[s] / totalLength)
-                    : remaining / meaningful.size();
-            counts[s] = minPerStroke + proportional;
-        }
-
-        // Adjust to hit exactly N total
-        int total = 0;
-        for (int c : counts) total += c;
-        // Distribute surplus/deficit to the longest strokes
-        int diff = n - total;
-        while (diff != 0) {
-            int bestIdx = 0;
-            double bestLen = 0;
-            for (int s = 0; s < meaningful.size(); s++) {
-                if (diff > 0 || counts[s] > minPerStroke) {
-                    if (lengths[s] > bestLen) {
-                        bestLen = lengths[s];
-                        bestIdx = s;
-                    }
-                }
-            }
-            counts[bestIdx] += (diff > 0) ? 1 : -1;
-            diff += (diff > 0) ? -1 : 1;
-        }
-
         // Resample each stroke independently
         List<CloudPoint> result = new ArrayList<>();
         for (int s = 0; s < meaningful.size(); s++) {
             List<CloudPoint> stroke = meaningful.get(s);
             int strokeId = stroke.get(0).strokeId;
-            int count = Math.max(2, counts[s]);
+            int count = allocation.strokeAllocations().get(s).pointCount();
             List<CloudPoint> resampled = resampleSingleStroke(stroke, count, strokeId);
             result.addAll(resampled);
         }
 
-        // Ensure exactly N
-        while (result.size() > n) {
-            result.remove(result.size() - 1);
-        }
-        while (result.size() < n) {
-            result.add(result.get(result.size() - 1));
+        if (result.size() != n) {
+            throw new IllegalStateException("Normalization allocation produced " + result.size()
+                    + " points, expected " + n);
         }
 
         return result.toArray(new CloudPoint[0]);
@@ -567,42 +674,48 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         }
 
         double interval = length / (count - 1);
-        List<CloudPoint> newPoints = new ArrayList<>();
+        List<CloudPoint> newPoints = new ArrayList<>(count);
         newPoints.add(new CloudPoint(stroke.get(0).x, stroke.get(0).y, strokeId));
 
-        double accDist = 0;
-        int srcIdx = 1;
+        double traversed = 0;
+        int segmentEnd = 1;
+        for (int sample = 1; sample < count - 1; sample++) {
+            double targetDistance = interval * sample;
 
-        while (newPoints.size() < count && srcIdx < stroke.size()) {
-            double d = dist(stroke.get(srcIdx - 1), stroke.get(srcIdx));
-            if (d < 1e-10) {
-                srcIdx++;
+            while (segmentEnd < stroke.size()) {
+                CloudPoint a = stroke.get(segmentEnd - 1);
+                CloudPoint b = stroke.get(segmentEnd);
+                double segmentLength = dist(a, b);
+                if (segmentLength < 1e-10) {
+                    segmentEnd++;
+                    continue;
+                }
+                if (traversed + segmentLength >= targetDistance) {
+                    break;
+                }
+                traversed += segmentLength;
+                segmentEnd++;
+            }
+
+            if (segmentEnd >= stroke.size()) {
+                CloudPoint last = stroke.get(stroke.size() - 1);
+                newPoints.add(new CloudPoint(last.x, last.y, strokeId));
                 continue;
             }
 
-            if (accDist + d >= interval) {
-                double t = (interval - accDist) / d;
-                double qx = stroke.get(srcIdx - 1).x + t * (stroke.get(srcIdx).x - stroke.get(srcIdx - 1).x);
-                double qy = stroke.get(srcIdx - 1).y + t * (stroke.get(srcIdx).y - stroke.get(srcIdx - 1).y);
-                CloudPoint q = new CloudPoint(qx, qy, strokeId);
-                newPoints.add(q);
-                // Insert and continue from interpolated point
-                stroke = new ArrayList<>(stroke);
-                stroke.add(srcIdx, q);
-                srcIdx++;
-                accDist = 0;
-            } else {
-                accDist += d;
-                srcIdx++;
-            }
+            CloudPoint a = stroke.get(segmentEnd - 1);
+            CloudPoint b = stroke.get(segmentEnd);
+            double segmentLength = dist(a, b);
+            double t = Math.max(0, Math.min(1, (targetDistance - traversed) / segmentLength));
+            newPoints.add(new CloudPoint(
+                    a.x + t * (b.x - a.x),
+                    a.y + t * (b.y - a.y),
+                    strokeId));
         }
 
-        // Pad with last point if short
-        while (newPoints.size() < count) {
-            newPoints.add(new CloudPoint(stroke.get(stroke.size() - 1).x, stroke.get(stroke.size() - 1).y, strokeId));
-        }
-
-        return newPoints.subList(0, count);
+        CloudPoint last = stroke.get(stroke.size() - 1);
+        newPoints.add(new CloudPoint(last.x, last.y, strokeId));
+        return newPoints;
     }
 
     /** Compute path length along a single stroke's points. */
@@ -657,6 +770,198 @@ public class PointCloudRecognizer implements SymbolRecognizer {
     }
 
     // ---- Utilities ----
+
+    /**
+     * Count meaningful closed contours while preserving player stroke freedom.
+     * A contour may close within one continued stroke or through a cycle of
+     * endpoint-connected strokes.
+     */
+    static int closedContourCount(List<List<Point>> strokes) {
+        if (strokes == null || strokes.isEmpty()) return 0;
+        double drawingDiagonal = drawingDiagonal(strokes);
+        if (drawingDiagonal < 1e-10) return 0;
+        double connectionTolerance = drawingDiagonal * CONTOUR_CONNECTION_RATIO;
+
+        int withinStrokeContours = 0;
+        int globallyClosedStrokes = 0;
+        for (List<Point> stroke : strokes) {
+            if (stroke == null || stroke.size() < 2) continue;
+            withinStrokeContours += countClosedSubpaths(
+                    stroke, connectionTolerance, drawingDiagonal);
+            if (distance(stroke.get(0), stroke.get(stroke.size() - 1)) <= connectionTolerance
+                    && isMeaningfulContour(stroke, 0, stroke.size() - 1, drawingDiagonal)) {
+                globallyClosedStrokes++;
+            }
+        }
+
+        int endpointGraphContours = countEndpointGraphContours(
+                strokes, connectionTolerance, drawingDiagonal);
+        return Math.max(0, endpointGraphContours
+                + withinStrokeContours - globallyClosedStrokes);
+    }
+
+    private static int countClosedSubpaths(List<Point> stroke, double tolerance,
+                                           double drawingDiagonal) {
+        int contours = 0;
+        int lastClosureEnd = -4;
+        for (int end = 3; end < stroke.size(); end++) {
+            if (end - lastClosureEnd <= 3) continue;
+            for (int start = end - 3; start >= 0; start--) {
+                if (distance(stroke.get(start), stroke.get(end)) <= tolerance
+                        && isMeaningfulContour(stroke, start, end, drawingDiagonal)) {
+                    contours++;
+                    lastClosureEnd = end;
+                    break;
+                }
+            }
+        }
+        return contours;
+    }
+
+    private static boolean isMeaningfulContour(List<Point> stroke, int start, int end,
+                                               double drawingDiagonal) {
+        if (end - start < 3) return false;
+        double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        double twiceSignedArea = 0;
+        for (int i = start; i <= end; i++) {
+            Point point = stroke.get(i);
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+            if (i < end) {
+                Point next = stroke.get(i + 1);
+                twiceSignedArea += point.x * next.y - next.x * point.y;
+            }
+        }
+        Point first = stroke.get(start);
+        Point last = stroke.get(end);
+        twiceSignedArea += last.x * first.y - first.x * last.y;
+
+        double width = maxX - minX;
+        double height = maxY - minY;
+        double area = Math.abs(twiceSignedArea) * 0.5;
+        double minimumArea = drawingDiagonal * drawingDiagonal * MIN_CONTOUR_AREA_RATIO;
+        return width >= drawingDiagonal * CONTOUR_CONNECTION_RATIO
+                && height >= drawingDiagonal * CONTOUR_CONNECTION_RATIO
+                && area >= minimumArea;
+    }
+
+    private record ContourEdge(int startNode, int endNode, List<Point> stroke) {}
+
+    private static int countEndpointGraphContours(List<List<Point>> strokes, double tolerance,
+                                                  double drawingDiagonal) {
+        List<Point> nodes = new ArrayList<>();
+        List<ContourEdge> edges = new ArrayList<>();
+        for (List<Point> stroke : strokes) {
+            if (stroke == null || stroke.size() < 2) continue;
+            Point start = stroke.get(0);
+            Point end = stroke.get(stroke.size() - 1);
+            int startNode = findOrCreateEndpointNode(nodes, start, tolerance);
+            int endNode = findOrCreateEndpointNode(nodes, end, tolerance);
+            if (startNode == endNode
+                    && !isMeaningfulContour(stroke, 0, stroke.size() - 1, drawingDiagonal)) {
+                continue;
+            }
+            edges.add(new ContourEdge(startNode, endNode, stroke));
+        }
+        if (edges.isEmpty()) return 0;
+
+        DisjointSet components = new DisjointSet(nodes.size());
+        for (ContourEdge edge : edges) {
+            components.union(edge.startNode(), edge.endNode());
+        }
+
+        int[] edgeCounts = new int[nodes.size()];
+        int[] nodeCounts = new int[nodes.size()];
+        boolean[] usedNodes = new boolean[nodes.size()];
+        double[] minX = new double[nodes.size()];
+        double[] minY = new double[nodes.size()];
+        double[] maxX = new double[nodes.size()];
+        double[] maxY = new double[nodes.size()];
+        Arrays.fill(minX, Double.MAX_VALUE);
+        Arrays.fill(minY, Double.MAX_VALUE);
+        Arrays.fill(maxX, -Double.MAX_VALUE);
+        Arrays.fill(maxY, -Double.MAX_VALUE);
+
+        for (ContourEdge edge : edges) {
+            int root = components.find(edge.startNode());
+            edgeCounts[root]++;
+            usedNodes[edge.startNode()] = true;
+            usedNodes[edge.endNode()] = true;
+            for (Point point : edge.stroke()) {
+                minX[root] = Math.min(minX[root], point.x);
+                minY[root] = Math.min(minY[root], point.y);
+                maxX[root] = Math.max(maxX[root], point.x);
+                maxY[root] = Math.max(maxY[root], point.y);
+            }
+        }
+        for (int node = 0; node < nodes.size(); node++) {
+            if (usedNodes[node]) nodeCounts[components.find(node)]++;
+        }
+
+        int contours = 0;
+        double minimumArea = drawingDiagonal * drawingDiagonal * MIN_CONTOUR_AREA_RATIO;
+        for (int root = 0; root < nodes.size(); root++) {
+            if (edgeCounts[root] == 0) continue;
+            int cycleRank = edgeCounts[root] - nodeCounts[root] + 1;
+            double boundingArea = (maxX[root] - minX[root]) * (maxY[root] - minY[root]);
+            if (cycleRank > 0 && boundingArea >= minimumArea) {
+                contours += cycleRank;
+            }
+        }
+        return contours;
+    }
+
+    private static int findOrCreateEndpointNode(List<Point> nodes, Point point, double tolerance) {
+        for (int i = 0; i < nodes.size(); i++) {
+            if (distance(nodes.get(i), point) <= tolerance) return i;
+        }
+        nodes.add(point);
+        return nodes.size() - 1;
+    }
+
+    private static double drawingDiagonal(List<List<Point>> strokes) {
+        double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        boolean foundPoint = false;
+        for (List<Point> stroke : strokes) {
+            if (stroke == null) continue;
+            for (Point point : stroke) {
+                foundPoint = true;
+                minX = Math.min(minX, point.x);
+                minY = Math.min(minY, point.y);
+                maxX = Math.max(maxX, point.x);
+                maxY = Math.max(maxY, point.y);
+            }
+        }
+        return foundPoint ? Math.hypot(maxX - minX, maxY - minY) : 0.0;
+    }
+
+    private static double distance(Point a, Point b) {
+        return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    private static final class DisjointSet {
+        private final int[] parent;
+
+        private DisjointSet(int size) {
+            parent = new int[size];
+            for (int i = 0; i < size; i++) parent[i] = i;
+        }
+
+        private int find(int value) {
+            if (parent[value] != value) parent[value] = find(parent[value]);
+            return parent[value];
+        }
+
+        private void union(int a, int b) {
+            int rootA = find(a);
+            int rootB = find(b);
+            if (rootA != rootB) parent[rootB] = rootA;
+        }
+    }
 
     private static boolean isClosedSingleStroke(List<List<Point>> strokes) {
         if (strokes.size() != 1 || strokes.get(0).size() < 4) return false;

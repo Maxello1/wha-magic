@@ -2,6 +2,7 @@ package com.maxello1.whamagic.parser;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.TreeSet;
 
 import com.maxello1.whamagic.magic.*;
 
@@ -30,36 +31,61 @@ public class SpellParser {
     }
 
     public static ParseResult parse(List<List<Point>> strokes) {
+        return parse(strokes, CandidateGenerationSettings.DEFAULTS);
+    }
+
+    /** Parse with explicit candidate and recognition limits, primarily for deterministic tests. */
+    public static ParseResult parse(List<List<Point>> strokes, CandidateGenerationSettings settings) {
         if (strokes == null || strokes.isEmpty()) {
             GlyphAst emptyAst = new GlyphAst(null, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
             return new ParseResult(emptyAst, SpellCompiler.compile(emptyAst));
         }
 
-        RingDetector.RingDetection ringDetection = RingDetector.detectRing(strokes);
+        RingDetector.RingSearchResult ringSearch = RingDetector.searchRing(strokes);
+        RingDetector.RingDetection ringDetection = ringSearch.detection();
+        RingDetector.RingSearchDiagnostics ringDiagnostics = ringSearch.diagnostics();
         RingDetector.RingGlyph ring = ringDetection != null ? ringDetection.glyph() : null;
-        
-        List<List<Point>> nonRingStrokes = new ArrayList<>();
-        if (ringDetection != null) {
-            for (int i = 0; i < strokes.size(); i++) {
-                if (!ringDetection.ringStrokeIndices().contains(i)) {
-                    nonRingStrokes.add(strokes.get(i));
-                }
+
+        List<IndexedStroke> nonRingStrokes = new ArrayList<>();
+        for (int i = 0; i < strokes.size(); i++) {
+            if (ringDetection == null || !ringDetection.ringStrokeIndices().contains(i)) {
+                nonRingStrokes.add(new IndexedStroke(i, strokes.get(i)));
             }
-        } else {
-            nonRingStrokes = strokes;
         }
-        
-        CandidateGenerationSettings settings = CandidateGenerationSettings.DEFAULTS;
+
         CandidateGenerator.GenerationResult genResult = CandidateGenerator.generateCandidates(nonRingStrokes, ring, settings);
-        
+
         SelectionEngine.SelectedSymbols selection = SelectionEngine.select(genResult.candidates(), ring, settings.maxRecognitionCalls());
-        
+
+        // Anything not owned by a selected symbol/unknown remains visible as dropped
+        // input. Ring strokes are intentionally excluded, and ring-prefiltered strokes
+        // still participate in symbol recognition.
+        TreeSet<Integer> droppedSourceStrokeIndices = new TreeSet<>();
+        for (IndexedStroke stroke : nonRingStrokes) {
+            droppedSourceStrokeIndices.add(stroke.originalIndex());
+        }
+        selection.sigils().forEach(sigil -> droppedSourceStrokeIndices.removeAll(sigil.sourceStrokeIndices()));
+        selection.signs().forEach(sign -> droppedSourceStrokeIndices.removeAll(sign.sourceStrokeIndices()));
+        selection.unknowns().forEach(unknown -> droppedSourceStrokeIndices.removeAll(unknown.sourceStrokeIndices()));
+
+        List<Integer> ringStrokeIndices = ringDetection == null
+                ? List.of()
+                : ringDetection.ringStrokeIndices().stream().sorted().toList();
+
         SegmentationDebugResult debugResult = new SegmentationDebugResult(
             genResult.primitiveGroups(),
             genResult.candidates(),
             selection.selectedCandidates(),
             selection.recognitionCalls(),
             genResult.candidateLimitReached(),
+            ringDiagnostics.budgetExhausted(),
+            selection.recognitionBudgetExhausted(),
+            List.copyOf(droppedSourceStrokeIndices),
+            selection.unevaluatedCandidateCount(),
+            ringDiagnostics.combinationsConsidered(),
+            ringDiagnostics.fitsAttempted(),
+            ringDiagnostics.elapsedNanos(),
+            ringStrokeIndices,
             selection.sigils(),
             selection.signs(),
             selection.unknowns(),
@@ -70,7 +96,10 @@ public class SpellParser {
         );
         
         GlyphAst ast = new GlyphAst(ring, selection.sigils(), selection.signs(), selection.unknowns());
-        SpellIr ir = SpellCompiler.compile(ast);
+        boolean recognitionComplete = !ringDiagnostics.budgetExhausted()
+                && !genResult.candidateLimitReached()
+                && !selection.recognitionBudgetExhausted();
+        SpellIr ir = SpellCompiler.compile(ast, recognitionComplete);
 
         return new ParseResult(ast, ir, debugResult);
     }

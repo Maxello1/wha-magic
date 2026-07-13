@@ -79,6 +79,7 @@ public class SampleRecorder {
                             s.addProperty("element", sigil.element() != null ? sigil.element().name() : "null");
                             s.addProperty("confidence", Math.round(sigil.recognitionConfidence() * 1000.0) / 1000.0);
                             s.addProperty("rejectionReason", sigil.rejectionReason().name());
+                            s.add("sourceStrokeIndices", GSON.toJsonTree(sigil.sourceStrokeIndices()));
                             addAlternatives(s, sigil.alternatives());
                             sigilsArray.add(s);
                         }
@@ -93,6 +94,7 @@ public class SampleRecorder {
                             s.addProperty("id", sign.id());
                             s.addProperty("confidence", Math.round(sign.confidence() * 1000.0) / 1000.0);
                             s.addProperty("angleAroundRing", Math.round(sign.angleAroundRing() * 100.0) / 100.0);
+                            s.add("sourceStrokeIndices", GSON.toJsonTree(sign.sourceStrokeIndices()));
                             signsArray.add(s);
                         }
                     }
@@ -106,6 +108,7 @@ public class SampleRecorder {
                             u.addProperty("candidateId", unk.candidateId());
                             u.addProperty("state", unk.state().name());
                             u.addProperty("rejectionReason", unk.rejectionReason().name());
+                            u.add("sourceStrokeIndices", GSON.toJsonTree(unk.sourceStrokeIndices()));
                             addAlternatives(u, unk.alternatives());
                             unknownsArray.add(u);
                         }
@@ -120,6 +123,14 @@ public class SampleRecorder {
                     resultObj.addProperty("primitiveGroupCount", result.debugResult.primitiveGroupCount());
                     resultObj.addProperty("selectedCandidateCount", result.debugResult.selectedCandidateCount());
                     resultObj.addProperty("candidateLimitReached", result.debugResult.candidateLimitReached());
+                    resultObj.addProperty("ringBudgetExhausted", result.debugResult.ringBudgetExhausted());
+                    resultObj.addProperty("recognitionBudgetExhausted", result.debugResult.recognitionBudgetExhausted());
+                    resultObj.addProperty("unevaluatedCandidateCount", result.debugResult.unevaluatedCandidateCount());
+                    resultObj.add("droppedSourceStrokeIndices", GSON.toJsonTree(result.debugResult.droppedSourceStrokeIndices()));
+                    resultObj.addProperty("ringCombinationsConsidered", result.debugResult.ringCombinationsConsidered());
+                    resultObj.addProperty("ringFitsAttempted", result.debugResult.ringFitsAttempted());
+                    resultObj.addProperty("ringElapsedNanos", result.debugResult.ringElapsedNanos());
+                    resultObj.add("ringStrokeIndices", GSON.toJsonTree(result.debugResult.ringStrokeIndices()));
                 }
 
                 root.add("result", resultObj);

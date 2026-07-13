@@ -6,6 +6,8 @@ import com.google.gson.JsonObject;
 import com.maxello1.whamagic.parser.Point;
 import com.maxello1.whamagic.parser.SpellDictionary;
 import com.maxello1.whamagic.parser.SpellParser;
+import com.maxello1.whamagic.magic.CandidateGenerationSettings;
+import com.maxello1.whamagic.magic.GlyphWarning;
 import net.minecraft.SharedConstants;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.item.ItemStack;
@@ -61,6 +63,39 @@ class SpellStackUpdateTest {
                 "Invalid overwrite must remove the previous compiled spell");
         assertSame(invalidStrokes, stack.get(rawStrokesComponent),
                 "Raw strokes must reflect the latest submitted drawing");
+    }
+
+    @Test
+    void budgetExhaustedOverwriteCannotRemainStored() throws Exception {
+        List<List<Point>> strokes = loadStrokes(
+                "src/test/resources/fixtures/canonical/multi/spell_light_complete.json");
+        SpellParser.ParseResult validResult = SpellParser.parse(strokes);
+        int exactCalls = validResult.debugResult.recognitionCalls();
+        assertTrue(validResult.ir.valid());
+        assertTrue(exactCalls > 0);
+
+        CandidateGenerationSettings defaults = CandidateGenerationSettings.DEFAULTS;
+        CandidateGenerationSettings limited = new CandidateGenerationSettings(
+                defaults.maxPrimitiveGroups(), defaults.maxGroupsPerCandidate(),
+                defaults.maxCandidates(), exactCalls - 1,
+                defaults.maxCandidateWidthRatio(), defaults.maxCandidateHeightRatio(),
+                defaults.maxAngularSpanDeg(), defaults.maxInternalGapRatio(),
+                defaults.maxEmptySpaceRatio());
+        SpellParser.ParseResult exhaustedResult = SpellParser.parse(strokes, limited);
+        assertTrue(exhaustedResult.debugResult.recognitionBudgetExhausted());
+        assertEquals(GlyphWarning.INCOMPLETE_RECOGNITION, exhaustedResult.ir.warning());
+        assertFalse(exhaustedResult.ir.valid());
+
+        ItemStack stack = new ItemStack(net.minecraft.world.item.Items.PAPER);
+        com.maxello1.whamagic.magic.SpellStackUpdater.applyParseResultToStack(
+                stack, validResult, strokes, storedSpellComponent, rawStrokesComponent);
+        assertNotNull(stack.get(storedSpellComponent));
+
+        com.maxello1.whamagic.magic.SpellStackUpdater.applyParseResultToStack(
+                stack, exhaustedResult, strokes, storedSpellComponent, rawStrokesComponent);
+        assertNull(stack.get(storedSpellComponent),
+                "A budget-exhausted redraw must remove the previous compiled spell");
+        assertSame(strokes, stack.get(rawStrokesComponent));
     }
 
     private static List<List<Point>> loadStrokes(String path) throws Exception {

@@ -17,7 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -30,6 +30,48 @@ public class RingDetector {
                             double residualStdDev, double medianTangentAlignment,
                             double p90TangentAlignment, double circularity) {}
     public record RingDetection(RingGlyph glyph, java.util.Set<Integer> ringStrokeIndices) {}
+
+    /** Deterministic work limits for the server-authoritative ring search. */
+    public record RingSearchSettings(
+            int maxEligibleStrokes,
+            int maxCombinations,
+            int maxResampledPointsPerStroke,
+            int maxRingStrokes
+    ) {
+        public static final RingSearchSettings DEFAULTS = new RingSearchSettings(18, 4096, 128, 4);
+
+        public RingSearchSettings {
+            if (maxEligibleStrokes < 1) throw new IllegalArgumentException("maxEligibleStrokes must be positive");
+            if (maxCombinations < 1) throw new IllegalArgumentException("maxCombinations must be positive");
+            if (maxResampledPointsPerStroke < 10) throw new IllegalArgumentException("maxResampledPointsPerStroke must be at least 10");
+            if (maxRingStrokes < 1) throw new IllegalArgumentException("maxRingStrokes must be positive");
+        }
+    }
+
+    /** Work and filtering diagnostics for one bounded ring search. */
+    public record RingSearchDiagnostics(
+            int inputStrokeCount,
+            int eligibleStrokeCount,
+            int combinationsConsidered,
+            int fitsAttempted,
+            long elapsedNanos,
+            boolean budgetExhausted,
+            List<Integer> droppedSourceStrokeIndices
+    ) {
+        public RingSearchDiagnostics {
+            droppedSourceStrokeIndices = List.copyOf(droppedSourceStrokeIndices);
+        }
+    }
+
+    /** Search result which distinguishes "no ring" from an exhausted search. */
+    public record RingSearchResult(RingDetection detection, RingSearchDiagnostics diagnostics) {}
+
+    private record IndexedStroke(int sourceIndex, List<Point> points) {}
+
+    private static final double RESAMPLE_INTERVAL = 0.025;
+    private static final double MIN_RING_STROKE_PATH = 0.08;
+    private static final double MIN_RING_STROKE_EXTENT = 0.05;
+    private static final double MAX_ENDPOINT_GAP_RADIUS_RATIO = 0.25;
 
     /**
      * Validation thresholds for circle-vs-polygon rejection.
@@ -56,57 +98,98 @@ public class RingDetector {
     }
 
     public static RingDetection detectRing(List<List<Point>> strokes) {
-        return detectRing(strokes, RingValidationThresholds.DEFAULTS);
+        return searchRing(strokes).detection();
     }
 
     public static RingDetection detectRing(List<List<Point>> strokes, RingValidationThresholds thresholds) {
-        Set<Integer> bestStrokes = null;
-        RingGlyph bestGlyph = null;
-        double bestScore = -1;
+        return searchRing(strokes, RingSearchSettings.DEFAULTS, thresholds).detection();
+    }
 
-        int n = strokes.size();
-        int maxK = Math.min(n, 4);
+    public static RingSearchResult searchRing(List<List<Point>> strokes) {
+        return searchRing(strokes, RingSearchSettings.DEFAULTS);
+    }
 
-        // Pre-resample to save time
-        List<List<Point>> resampledStrokes = new ArrayList<>();
-        for (int i = 0; i < n; i++) {
-            resampledStrokes.add(resample(strokes.get(i), 0.025));
+    public static RingSearchResult searchRing(List<List<Point>> strokes, RingSearchSettings settings) {
+        return searchRing(strokes, settings, RingValidationThresholds.DEFAULTS);
+    }
+
+    private static RingSearchResult searchRing(List<List<Point>> strokes,
+                                               RingSearchSettings settings,
+                                               RingValidationThresholds thresholds) {
+        long started = System.nanoTime();
+        int inputStrokeCount = strokes == null ? 0 : strokes.size();
+        if (strokes == null || strokes.isEmpty()) {
+            return new RingSearchResult(null, new RingSearchDiagnostics(
+                    inputStrokeCount, 0, 0, 0, System.nanoTime() - started, false, List.of()));
         }
 
-        for (int k = 1; k <= maxK; k++) {
-            List<List<Integer>> combos = new ArrayList<>();
-            generateCombinations(n, k, 0, new ArrayList<>(), combos);
+        List<IndexedStroke> eligibleStrokes = new ArrayList<>();
+        List<Integer> droppedSourceIndices = new ArrayList<>();
+        boolean eligibleLimitExceeded = false;
 
-            for (List<Integer> combo : combos) {
-                // Collect per-stroke point lists (preserve stroke boundaries for tangent analysis)
-                List<List<Point>> candidateStrokes = new ArrayList<>();
-                int totalPoints = 0;
-                for (int idx : combo) {
-                    List<Point> s = resampledStrokes.get(idx);
-                    candidateStrokes.add(s);
-                    totalPoints += s.size();
-                }
-
-                if (totalPoints < 10) continue;
-
-                RingGlyph glyph = fitCircle(candidateStrokes, 45, thresholds);
-                if (glyph != null && glyph.radius > 0.08 && glyph.radius < 0.8 && glyph.completeness > 0.75) {
-                    double score = glyph.completeness - (glyph.rmse * 5.0) - (k * 0.01);
-                    if (bestGlyph == null || score > bestScore) {
-                        bestGlyph = glyph;
-                        bestStrokes = new HashSet<>(combo);
-                        bestScore = score;
-                    }
-                }
+        // Filter before resampling so irrelevant strokes cannot expand into large point clouds.
+        for (int i = 0; i < strokes.size(); i++) {
+            List<Point> stroke = strokes.get(i);
+            if (!isRingLikelyStroke(stroke)) {
+                droppedSourceIndices.add(i);
+                continue;
             }
+            if (eligibleStrokes.size() >= settings.maxEligibleStrokes()) {
+                droppedSourceIndices.add(i);
+                eligibleLimitExceeded = true;
+                continue;
+            }
+            List<Point> resampled = resample(stroke, RESAMPLE_INTERVAL, settings.maxResampledPointsPerStroke());
+            if (resampled.size() < 3) {
+                droppedSourceIndices.add(i);
+                continue;
+            }
+            eligibleStrokes.add(new IndexedStroke(i, resampled));
+        }
+
+        // Dropping a ring-like stroke due to the eligible-stroke cap makes the search partial.
+        // Fail closed rather than authoritatively choosing from an incomplete search space.
+        if (eligibleLimitExceeded) {
+            RingSearchDiagnostics diagnostics = new RingSearchDiagnostics(
+                    inputStrokeCount, eligibleStrokes.size(), 0, 0,
+                    System.nanoTime() - started, true, droppedSourceIndices);
+            LOGGER.debug("Ring detection: eligible-stroke budget exhausted ({}/{})",
+                    eligibleStrokes.size(), settings.maxEligibleStrokes());
+            return new RingSearchResult(null, diagnostics);
+        }
+
+        Set<Integer> bestStrokes = null;
+        RingGlyph bestGlyph = null;
+        SearchState searchState = new SearchState(settings.maxCombinations());
+        int maxK = Math.min(eligibleStrokes.size(), settings.maxRingStrokes());
+        for (int k = 1; k <= maxK && !searchState.budgetExhausted; k++) {
+            enumerateCombinations(eligibleStrokes, k, 0, new ArrayList<>(), searchState, thresholds);
+        }
+
+        if (searchState.bestGlyph != null) {
+            bestGlyph = searchState.bestGlyph;
+            bestStrokes = searchState.bestStrokes;
+        }
+
+        RingSearchDiagnostics diagnostics = new RingSearchDiagnostics(
+                inputStrokeCount, eligibleStrokes.size(), searchState.combinationsConsidered,
+                searchState.fitsAttempted, System.nanoTime() - started,
+                searchState.budgetExhausted, droppedSourceIndices);
+
+        if (searchState.budgetExhausted) {
+            LOGGER.debug("Ring detection: combination budget exhausted after {} combinations and {} fits",
+                    searchState.combinationsConsidered, searchState.fitsAttempted);
+            return new RingSearchResult(null, diagnostics);
         }
 
         if (bestStrokes == null || bestGlyph == null) {
-            LOGGER.debug("Ring detection: no ring found");
-            return null;
+            LOGGER.debug("Ring detection: no ring found (eligible={}, combinations={}, fits={})",
+                    eligibleStrokes.size(), searchState.combinationsConsidered, searchState.fitsAttempted);
+            return new RingSearchResult(null, diagnostics);
         }
+
         LOGGER.debug("Ring detection: found ring (r={}, completeness={}, rmse={}, normRmse={}, " +
-                        "maxResid={}, residStd={}, medTangent={}, p90Tangent={}, circ={})",
+                        "maxResid={}, residStd={}, medTangent={}, p90Tangent={}, circ={}, combinations={}, fits={})",
                 String.format("%.3f", bestGlyph.radius),
                 String.format("%.3f", bestGlyph.completeness),
                 String.format("%.4f", bestGlyph.rmse),
@@ -115,19 +198,70 @@ public class RingDetector {
                 String.format("%.4f", bestGlyph.residualStdDev),
                 String.format("%.4f", bestGlyph.medianTangentAlignment),
                 String.format("%.4f", bestGlyph.p90TangentAlignment),
-                String.format("%.4f", bestGlyph.circularity));
-        return new RingDetection(bestGlyph, bestStrokes);
+                String.format("%.4f", bestGlyph.circularity),
+                searchState.combinationsConsidered,
+                searchState.fitsAttempted);
+        return new RingSearchResult(new RingDetection(bestGlyph, Set.copyOf(bestStrokes)), diagnostics);
     }
 
-    private static void generateCombinations(int n, int k, int start, List<Integer> current, List<List<Integer>> result) {
+    private static void enumerateCombinations(List<IndexedStroke> eligibleStrokes,
+                                              int k,
+                                              int start,
+                                              List<Integer> current,
+                                              SearchState state,
+                                              RingValidationThresholds thresholds) {
+        if (state.budgetExhausted) return;
         if (current.size() == k) {
-            result.add(new ArrayList<>(current));
+            if (state.combinationsConsidered >= state.maxCombinations) {
+                state.budgetExhausted = true;
+                return;
+            }
+            state.combinationsConsidered++;
+
+            List<List<Point>> candidateStrokes = new ArrayList<>(k);
+            Set<Integer> sourceIndices = new LinkedHashSet<>();
+            int totalPoints = 0;
+            for (int eligibleIndex : current) {
+                IndexedStroke stroke = eligibleStrokes.get(eligibleIndex);
+                candidateStrokes.add(stroke.points());
+                sourceIndices.add(stroke.sourceIndex());
+                totalPoints += stroke.points().size();
+            }
+            if (totalPoints < 10) return;
+
+            state.fitsAttempted++;
+            RingGlyph glyph = fitCircle(candidateStrokes, 45, thresholds);
+            if (glyph != null && glyph.radius > 0.08 && glyph.radius < 0.8
+                    && glyph.completeness > 0.75 && glyph.isClosed()) {
+                double score = glyph.completeness - (glyph.rmse * 5.0) - (k * 0.01);
+                if (state.bestGlyph == null || score > state.bestScore) {
+                    state.bestGlyph = glyph;
+                    state.bestStrokes = sourceIndices;
+                    state.bestScore = score;
+                }
+            }
             return;
         }
-        for (int i = start; i < n; i++) {
+        int remainingNeeded = k - current.size();
+        int lastStart = eligibleStrokes.size() - remainingNeeded;
+        for (int i = start; i <= lastStart && !state.budgetExhausted; i++) {
             current.add(i);
-            generateCombinations(n, k, i + 1, current, result);
+            enumerateCombinations(eligibleStrokes, k, i + 1, current, state, thresholds);
             current.remove(current.size() - 1);
+        }
+    }
+
+    private static final class SearchState {
+        private final int maxCombinations;
+        private int combinationsConsidered;
+        private int fitsAttempted;
+        private boolean budgetExhausted;
+        private RingGlyph bestGlyph;
+        private Set<Integer> bestStrokes;
+        private double bestScore = -1;
+
+        private SearchState(int maxCombinations) {
+            this.maxCombinations = maxCombinations;
         }
     }
 
@@ -317,15 +451,145 @@ public class RingDetector {
         }
 
         double completeness = filled / 360.0;
-        boolean isClosed = completeness > 0.85 && maxGap < maxGapDeg;
+        boolean angularlyClosed = completeness > 0.85 && maxGap < maxGapDeg;
+        boolean endpointTopologyClosed = hasClosedEndpointTopology(
+                candidateStrokes, R * MAX_ENDPOINT_GAP_RADIUS_RATIO);
+        boolean isClosed = angularlyClosed && endpointTopologyClosed;
 
         return new RingGlyph(center, R, completeness, isClosed, maxGap, rmse,
                 normalizedRmse, maxResidual, residualStdDev,
                 medianTangentAlignment, p90TangentAlignment, circularity);
     }
 
-    private static List<Point> resample(List<Point> pts, double interval) {
+    /**
+     * Cheap, permissive ring-likelihood filter applied before point-cloud expansion.
+     * A useful ring stroke must have visible extent and either curve away from its
+     * endpoint chord or return close to its start. Polygonal loops intentionally
+     * remain eligible and are rejected later by the circle-vs-polygon gates.
+     */
+    private static boolean isRingLikelyStroke(List<Point> pts) {
+        if (pts == null || pts.size() < 3) return false;
+
+        double minX = Double.POSITIVE_INFINITY;
+        double minY = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY;
+        double maxY = Double.NEGATIVE_INFINITY;
+        double pathLength = 0;
+
+        Point previous = null;
+        for (Point point : pts) {
+            if (point == null || !Double.isFinite(point.x) || !Double.isFinite(point.y)) return false;
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+            if (previous != null) pathLength += distance(previous, point);
+            previous = point;
+        }
+
+        double extent = Math.hypot(maxX - minX, maxY - minY);
+        if (pathLength < MIN_RING_STROKE_PATH || extent < MIN_RING_STROKE_EXTENT) return false;
+
+        double endpointChord = distance(pts.get(0), pts.get(pts.size() - 1));
+        boolean returnsNearStart = endpointChord <= Math.max(0.03, extent * 0.20);
+        boolean visiblyCurved = pathLength - endpointChord > 0.002
+                && pathLength > endpointChord * 1.003;
+        return returnsNearStart || visiblyCurved;
+    }
+
+    /**
+     * A single-stroke ring must return near its start. For multiple strokes,
+     * every endpoint must pair with an endpoint from another stroke and the
+     * resulting stroke graph must be connected. With at most four strokes this
+     * bounded perfect-matching search examines no more than 105 pairings.
+     */
+    private static boolean hasClosedEndpointTopology(List<List<Point>> strokes, double maxEndpointGap) {
+        if (strokes.isEmpty()) return false;
+        if (strokes.size() == 1) {
+            List<Point> stroke = strokes.get(0);
+            return !stroke.isEmpty()
+                    && distance(stroke.get(0), stroke.get(stroke.size() - 1)) <= maxEndpointGap;
+        }
+
+        List<StrokeEndpoint> endpoints = new ArrayList<>(strokes.size() * 2);
+        for (int strokeIndex = 0; strokeIndex < strokes.size(); strokeIndex++) {
+            List<Point> stroke = strokes.get(strokeIndex);
+            if (stroke.isEmpty()) return false;
+            endpoints.add(new StrokeEndpoint(strokeIndex, stroke.get(0)));
+            endpoints.add(new StrokeEndpoint(strokeIndex, stroke.get(stroke.size() - 1)));
+        }
+
+        return findConnectedEndpointPairing(
+                endpoints, maxEndpointGap, new boolean[endpoints.size()],
+                new boolean[strokes.size()][strokes.size()]);
+    }
+
+    private record StrokeEndpoint(int strokeIndex, Point point) {}
+
+    private static boolean findConnectedEndpointPairing(List<StrokeEndpoint> endpoints,
+                                                         double maxEndpointGap,
+                                                         boolean[] paired,
+                                                         boolean[][] strokeConnections) {
+        int firstUnpaired = -1;
+        for (int i = 0; i < paired.length; i++) {
+            if (!paired[i]) {
+                firstUnpaired = i;
+                break;
+            }
+        }
+        if (firstUnpaired < 0) return isConnectedStrokeGraph(strokeConnections);
+
+        StrokeEndpoint first = endpoints.get(firstUnpaired);
+        paired[firstUnpaired] = true;
+        for (int j = firstUnpaired + 1; j < endpoints.size(); j++) {
+            if (paired[j]) continue;
+            StrokeEndpoint second = endpoints.get(j);
+            if (first.strokeIndex() == second.strokeIndex()) continue;
+            if (distance(first.point(), second.point()) > maxEndpointGap) continue;
+
+            boolean wasConnected = strokeConnections[first.strokeIndex()][second.strokeIndex()];
+            paired[j] = true;
+            strokeConnections[first.strokeIndex()][second.strokeIndex()] = true;
+            strokeConnections[second.strokeIndex()][first.strokeIndex()] = true;
+
+            if (findConnectedEndpointPairing(endpoints, maxEndpointGap, paired, strokeConnections)) return true;
+
+            paired[j] = false;
+            if (!wasConnected) {
+                strokeConnections[first.strokeIndex()][second.strokeIndex()] = false;
+                strokeConnections[second.strokeIndex()][first.strokeIndex()] = false;
+            }
+        }
+        paired[firstUnpaired] = false;
+        return false;
+    }
+
+    private static boolean isConnectedStrokeGraph(boolean[][] connections) {
+        boolean[] visited = new boolean[connections.length];
+        visitStrokeGraph(0, connections, visited);
+        for (boolean reached : visited) {
+            if (!reached) return false;
+        }
+        return true;
+    }
+
+    private static void visitStrokeGraph(int stroke, boolean[][] connections, boolean[] visited) {
+        if (visited[stroke]) return;
+        visited[stroke] = true;
+        for (int next = 0; next < connections.length; next++) {
+            if (connections[stroke][next]) visitStrokeGraph(next, connections, visited);
+        }
+    }
+
+    private static List<Point> resample(List<Point> pts, double interval, int maxPoints) {
         if (pts.isEmpty()) return pts;
+        double pathLength = 0;
+        for (int i = 1; i < pts.size(); i++) pathLength += distance(pts.get(i - 1), pts.get(i));
+        if (pathLength < 1e-10) return List.of(pts.get(0));
+
+        // Raising the interval for extremely long/jagged strokes preserves the
+        // complete path while bounding the number of generated samples.
+        double effectiveInterval = Math.max(interval, pathLength / (maxPoints - 1));
         List<Point> resampled = new ArrayList<>();
         resampled.add(pts.get(0));
         double dAccum = 0;
@@ -334,11 +598,17 @@ public class RingDetector {
         while (i < pts.size()) {
             Point next = pts.get(i);
             double d = distance(current, next);
-            if (dAccum + d >= interval) {
-                double tx = current.x + ((interval - dAccum) / d) * (next.x - current.x);
-                double ty = current.y + ((interval - dAccum) / d) * (next.y - current.y);
+            if (d < 1e-12) {
+                current = next;
+                i++;
+                continue;
+            }
+            if (dAccum + d >= effectiveInterval) {
+                double tx = current.x + ((effectiveInterval - dAccum) / d) * (next.x - current.x);
+                double ty = current.y + ((effectiveInterval - dAccum) / d) * (next.y - current.y);
                 Point q = new Point(tx, ty);
                 resampled.add(q);
+                if (resampled.size() >= maxPoints) break;
                 current = q;
                 dAccum = 0;
             } else {

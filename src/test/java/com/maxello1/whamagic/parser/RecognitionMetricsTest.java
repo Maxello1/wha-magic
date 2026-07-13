@@ -10,6 +10,7 @@ import com.maxello1.whamagic.magic.RecognitionRejectionReason;
 import com.maxello1.whamagic.parser.SelectionEngine.EvaluatedCandidate;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.io.File;
 import java.io.FileReader;
@@ -22,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -40,6 +42,7 @@ public class RecognitionMetricsTest {
     }
 
     @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void produceRecognitionMetrics() throws Exception {
         File fixturesRoot = new File("src/test/resources/fixtures");
         assertTrue(fixturesRoot.exists() && fixturesRoot.isDirectory(), "Fixtures directory must exist");
@@ -133,9 +136,10 @@ public class RecognitionMetricsTest {
             List<String> top3Ids = getTop3Ids(result);
 
             String expectedLabel = formatExpected(expectedSigils, expectedSigns);
-            report.append(String.format("%-35s expected=%-20s recognized=%-30s\n",
+            report.append(String.format("%-35s expected=%-20s recognized=%-30s %s\n",
                     file.getName(), expectedLabel.isEmpty() ? "(none)" : expectedLabel,
-                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds)));
+                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds),
+                    budgetSummary(result)));
 
             if (isPositive) {
                 totalPositive++;
@@ -236,9 +240,10 @@ public class RecognitionMetricsTest {
             List<String> recognizedIds = getRecognizedIds(result);
 
             totalNegative++;
-            report.append(String.format("%-35s expected=%-20s recognized=%-30s\n",
+            report.append(String.format("%-35s expected=%-20s recognized=%-30s %s\n",
                     file.getName(), "(none)",
-                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds)));
+                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds),
+                    budgetSummary(result)));
 
             if (!recognizedIds.isEmpty()) {
                 falsePositives++;
@@ -291,10 +296,10 @@ public class RecognitionMetricsTest {
             List<String> recognizedIds = getRecognizedIds(result);
             int recognitionCalls = result.debugResult != null ? result.debugResult.recognitionCalls() : 0;
             int candidateCount = result.debugResult != null ? result.debugResult.candidateCount() : 0;
-            report.append(String.format("%-35s expected=%-20s recognized=%-30s calls=%-4d candidates=%-4d parseMs=%.3f\n",
+            report.append(String.format("%-35s expected=%-20s recognized=%-30s calls=%-4d candidates=%-4d parseMs=%.3f %s\n",
                     file.getName(), expectedLabel.isEmpty() ? "(none)" : expectedLabel,
                     recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds),
-                    recognitionCalls, candidateCount, parseDurationMs));
+                    recognitionCalls, candidateCount, parseDurationMs, budgetSummary(result)));
 
             if (!sigilMatch || !signMatch) {
                 canonicalMultiFailures.add(file.getName()
@@ -347,9 +352,10 @@ public class RecognitionMetricsTest {
 
             String expectedLabel = formatExpected(expectedSigils, expectedSigns);
             List<String> recognizedIds = getRecognizedIds(result);
-            report.append(String.format("%-35s expected=%-20s recognized=%-30s [invariance]\n",
+            report.append(String.format("%-35s expected=%-20s recognized=%-30s [invariance] %s\n",
                     file.getName(), expectedLabel.isEmpty() ? "(none)" : expectedLabel,
-                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds)));
+                    recognizedIds.isEmpty() ? "(none)" : String.join(", ", recognizedIds),
+                    budgetSummary(result)));
 
             if (!sigilMatch || !signMatch) {
                 canonicalInvarianceFailures.add(file.getName()
@@ -721,8 +727,10 @@ public class RecognitionMetricsTest {
         if (result.ast != null && result.ast.signs() != null) {
             List<String> signEntries = new ArrayList<>();
             for (var sign : result.ast.signs()) {
+                List<Integer> sorted = new ArrayList<>(sign.sourceStrokeIndices());
+                Collections.sort(sorted);
                 long roundedScore = Math.round(sign.confidence() * 1e6);
-                signEntries.add("SIGN:" + sign.id() + ":score=" + roundedScore);
+                signEntries.add("SIGN:" + sign.id() + ":strokes=" + sorted + ":score=" + roundedScore);
             }
             Collections.sort(signEntries);
             fp.append(String.join("|", signEntries));
@@ -743,7 +751,15 @@ public class RecognitionMetricsTest {
         fp.append(";");
         // Recognition call count
         if (result.debugResult != null) {
-            fp.append("calls=" + result.debugResult.recognitionCalls());
+            fp.append("calls=" + result.debugResult.recognitionCalls())
+                    .append(":ringBudget=").append(result.debugResult.ringBudgetExhausted())
+                    .append(":candidateLimit=").append(result.debugResult.candidateLimitReached())
+                    .append(":recognitionBudget=").append(result.debugResult.recognitionBudgetExhausted())
+                    .append(":unevaluated=").append(result.debugResult.unevaluatedCandidateCount())
+                    .append(":dropped=").append(result.debugResult.droppedSourceStrokeIndices())
+                    .append(":ringStrokes=").append(result.debugResult.ringStrokeIndices())
+                    .append(":ringCombinations=").append(result.debugResult.ringCombinationsConsidered())
+                    .append(":ringFits=").append(result.debugResult.ringFitsAttempted());
         }
         return fp.toString();
     }
@@ -755,6 +771,13 @@ public class RecognitionMetricsTest {
      */
     private void enforceFixtureMetadata(JsonObject fixture, SpellParser.ParseResult result,
                                         String fileName, List<String> failures) {
+        if (result.debugResult == null) {
+            failures.add(fileName + ": missing parser diagnostics");
+        } else if (result.debugResult.ringBudgetExhausted()
+                || result.debugResult.candidateLimitReached()
+                || result.debugResult.recognitionBudgetExhausted()) {
+            failures.add(fileName + ": bounded recognition search exhausted " + budgetSummary(result));
+        }
         if (fixture.has("expectRing")) {
             boolean expected = fixture.get("expectRing").getAsBoolean();
             boolean actual = result.ast != null && result.ast.ring() != null;
@@ -790,6 +813,7 @@ public class RecognitionMetricsTest {
             out.append("    (no debug result)\n\n");
             return;
         }
+        out.append("    ").append(budgetSummary(result)).append('\n');
         out.append("    Primitive groups: ");
         for (com.maxello1.whamagic.magic.PrimitiveStrokeGroup group : result.debugResult.primitiveGroups()) {
             out.append('#').append(group.id()).append(group.sourceStrokeIndices()).append(' ');
@@ -813,6 +837,17 @@ public class RecognitionMetricsTest {
                     eval.sigilRoleScore, eval.signRoleScore));
         }
         out.append('\n');
+    }
+
+    private String budgetSummary(SpellParser.ParseResult result) {
+        if (result.debugResult == null) return "[budgets unavailable]";
+        return String.format("[search calls=%d ringBudget=%s candidateLimit=%s recognitionBudget=%s unevaluated=%d dropped=%s]",
+                result.debugResult.recognitionCalls(),
+                result.debugResult.ringBudgetExhausted(),
+                result.debugResult.candidateLimitReached(),
+                result.debugResult.recognitionBudgetExhausted(),
+                result.debugResult.unevaluatedCandidateCount(),
+                result.debugResult.droppedSourceStrokeIndices());
     }
 
     private String recognitionSummary(RasterRecognizer.RecognitionResult result) {

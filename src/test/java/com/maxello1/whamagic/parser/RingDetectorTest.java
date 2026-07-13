@@ -6,10 +6,12 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.maxello1.whamagic.magic.RingDetector;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.io.File;
 import java.io.FileReader;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -20,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * separately from RecognitionMetricsTest which answers "Was the entire spell
  * interpreted correctly?"</p>
  */
+@Timeout(value = 5, unit = TimeUnit.SECONDS)
 public class RingDetectorTest {
 
     private static final Gson GSON = new Gson();
@@ -45,11 +48,16 @@ public class RingDetectorTest {
             boolean expectRing = json.has("expectRing") && json.get("expectRing").getAsBoolean();
             List<List<Point>> strokes = parseStrokes(json.getAsJsonArray("strokes"));
 
-            RingDetector.RingDetection detection = RingDetector.detectRing(strokes);
+            RingDetector.RingSearchResult searchResult = RingDetector.searchRing(strokes);
+            RingDetector.RingDetection detection = searchResult.detection();
             boolean ringDetected = detection != null;
+            var diagnostics = searchResult.diagnostics();
 
-            report.append(String.format("%-35s expect=%-5s detected=%-5s",
-                    f.getName(), expectRing, ringDetected));
+            report.append(String.format("%-35s expect=%-5s detected=%-5s eligible=%d combos=%d fits=%d exhausted=%s dropped=%s",
+                    f.getName(), expectRing, ringDetected,
+                    diagnostics.eligibleStrokeCount(), diagnostics.combinationsConsidered(),
+                    diagnostics.fitsAttempted(), diagnostics.budgetExhausted(),
+                    diagnostics.droppedSourceStrokeIndices()));
 
             if (detection != null) {
                 var g = detection.glyph();
@@ -64,6 +72,22 @@ public class RingDetectorTest {
 
             if (expectRing != ringDetected) {
                 failures.add(f.getName() + ": expectRing=" + expectRing + " detected=" + ringDetected);
+            }
+            if (detection != null && !detection.glyph().isClosed()) {
+                failures.add(f.getName() + ": accepted ring must report isClosed=true");
+            }
+            if (json.has("expectedRingStrokeIndices") && detection != null) {
+                Set<Integer> expectedIndices = new LinkedHashSet<>();
+                for (JsonElement element : json.getAsJsonArray("expectedRingStrokeIndices")) {
+                    expectedIndices.add(element.getAsInt());
+                }
+                if (!expectedIndices.equals(detection.ringStrokeIndices())) {
+                    failures.add(f.getName() + ": expected ring strokes=" + expectedIndices
+                            + " actual=" + detection.ringStrokeIndices());
+                }
+            }
+            if (diagnostics.combinationsConsidered() > RingDetector.RingSearchSettings.DEFAULTS.maxCombinations()) {
+                failures.add(f.getName() + ": ring work exceeded the default combination budget");
             }
         }
 
@@ -129,6 +153,64 @@ public class RingDetectorTest {
                         (detection != null ? "Detected ring: r=" +
                                 String.format("%.3f", detection.glyph().radius()) +
                                 " strokes=" + detection.ringStrokeIndices() : ""));
+    }
+
+    @Test
+    public void testManyNonRingStrokesStayWithinDefaultBudget() throws Exception {
+        File f = new File("src/test/resources/fixtures/canonical/ring_shapes/ring_many_non_ring_strokes.json");
+        assertTrue(f.exists(), "Many-stroke ring stress fixture must exist");
+
+        JsonObject json = GSON.fromJson(new FileReader(f), JsonObject.class);
+        List<List<Point>> strokes = parseStrokes(json.getAsJsonArray("strokes"));
+        RingDetector.RingSearchResult result = RingDetector.searchRing(strokes);
+
+        assertEquals(64, result.diagnostics().inputStrokeCount());
+        assertNull(result.detection(), "Straight-stroke stress input must not produce a ring");
+        assertFalse(result.diagnostics().budgetExhausted(),
+                "Cheap filtering should handle straight-stroke stress input without exhausting the budget");
+        assertTrue(result.diagnostics().combinationsConsidered()
+                        <= RingDetector.RingSearchSettings.DEFAULTS.maxCombinations(),
+                "Default ring search must stay within its deterministic work cap");
+        assertEquals(64, result.diagnostics().droppedSourceStrokeIndices().size(),
+                "All straight strokes should be filtered before ring fitting");
+    }
+
+    @Test
+    public void testInjectedCombinationBudgetIsVisibleAndFailClosed() throws Exception {
+        List<Point> circle = readFirstStroke("src/test/resources/fixtures/canonical/ring_shapes/ring_clean_circle.json");
+        List<List<Point>> strokes = new ArrayList<>();
+        for (int i = 0; i < 8; i++) strokes.add(new ArrayList<>(circle));
+
+        RingDetector.RingSearchSettings settings = new RingDetector.RingSearchSettings(18, 3, 128, 4);
+        RingDetector.RingSearchResult result = RingDetector.searchRing(strokes, settings);
+
+        assertTrue(result.diagnostics().budgetExhausted());
+        assertEquals(3, result.diagnostics().combinationsConsidered());
+        assertEquals(3, result.diagnostics().fitsAttempted());
+        assertEquals(8, result.diagnostics().eligibleStrokeCount());
+        assertNull(result.detection(),
+                "A provisional ring from an incomplete search must not become authoritative");
+    }
+
+    @Test
+    public void testEligibleStrokeLimitIsVisibleAndFailClosed() throws Exception {
+        List<Point> circle = readFirstStroke("src/test/resources/fixtures/canonical/ring_shapes/ring_clean_circle.json");
+        List<List<Point>> strokes = new ArrayList<>();
+        for (int i = 0; i < 19; i++) strokes.add(new ArrayList<>(circle));
+
+        RingDetector.RingSearchResult result = RingDetector.searchRing(strokes);
+
+        assertTrue(result.diagnostics().budgetExhausted());
+        assertEquals(18, result.diagnostics().eligibleStrokeCount());
+        assertEquals(List.of(18), result.diagnostics().droppedSourceStrokeIndices());
+        assertEquals(0, result.diagnostics().combinationsConsidered(),
+                "An over-limit eligible set should fail before combination enumeration");
+        assertNull(result.detection());
+    }
+
+    private static List<Point> readFirstStroke(String path) throws Exception {
+        JsonObject json = GSON.fromJson(new FileReader(path), JsonObject.class);
+        return parseStrokes(json.getAsJsonArray("strokes")).get(0);
     }
 
     private static List<List<Point>> parseStrokes(JsonArray strokesArr) {
