@@ -3,6 +3,7 @@ import net.minecraft.resources.Identifier;
 import com.maxello1.whamagic.parser.BoundingBox;
 import com.maxello1.whamagic.parser.Point;
 import java.util.List;
+import java.util.Objects;
 
 public record RecognizedSigil(
     Identifier id,
@@ -17,6 +18,8 @@ public record RecognizedSigil(
     RecognitionRejectionReason rejectionReason
 ) {
     public RecognizedSigil {
+        id = Objects.requireNonNull(id, "id");
+        semantic = Objects.requireNonNull(semantic, "semantic");
         sourceStrokeIndices = sourceStrokeIndices == null ? List.of() : List.copyOf(sourceStrokeIndices);
         alternatives = alternatives == null ? List.of() : List.copyOf(alternatives);
         rejectionReason = rejectionReason == null ? RecognitionRejectionReason.NONE : rejectionReason;

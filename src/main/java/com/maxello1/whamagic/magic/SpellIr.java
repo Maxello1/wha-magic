@@ -1,6 +1,8 @@
 package com.maxello1.whamagic.magic;
 
 import net.minecraft.resources.Identifier;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -16,7 +18,9 @@ public record SpellIr(
 ) {
     public SpellIr {
         elements = elements == null ? List.of() : List.copyOf(elements);
-        signCounts = signCounts == null ? Map.of() : Map.copyOf(signCounts);
+        signCounts = signCounts == null
+                ? Map.of()
+                : Collections.unmodifiableMap(new LinkedHashMap<>(signCounts));
         signSemantics = signSemantics == null ? List.of() : List.copyOf(signSemantics);
     }
 

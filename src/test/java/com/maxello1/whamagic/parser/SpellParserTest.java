@@ -9,6 +9,10 @@ import com.maxello1.whamagic.magic.ClassifiedUnknownInk;
 import com.maxello1.whamagic.magic.GlyphAst;
 import com.maxello1.whamagic.magic.GlyphWarning;
 import com.maxello1.whamagic.magic.RingDetector;
+import com.maxello1.whamagic.magic.RecognizedSigil;
+import com.maxello1.whamagic.magic.RecognizedSign;
+import com.maxello1.whamagic.magic.SigilSemantic;
+import com.maxello1.whamagic.magic.SignSemantic;
 import com.maxello1.whamagic.magic.SpellState;
 import com.maxello1.whamagic.magic.SpellCompiler;
 import com.maxello1.whamagic.magic.SymbolKind;
@@ -25,9 +29,12 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
+import net.minecraft.resources.Identifier;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -324,6 +331,59 @@ public class SpellParserTest {
         var ir = SpellCompiler.compile(ast);
 
         assertTrue(ir.valid(), () -> "Harmless unexplained ink invalidated spell: " + ir);
+    }
+
+    @Test
+    public void groupedHarmlessMarksRemainHarmlessButAccumulationFailsClosed() {
+        List<List<Point>> threeMarks = List.of(
+                shortMark(0.10), shortMark(0.30), shortMark(0.50));
+        List<List<Point>> fourMarks = List.of(
+                shortMark(0.10), shortMark(0.30), shortMark(0.50), shortMark(0.70));
+
+        assertEquals(UnknownInkClassification.HARMLESS_UNEXPLAINED,
+                UnknownInkClassifier.classify(
+                        threeMarks,
+                        com.maxello1.whamagic.magic.RecognitionRejectionReason.SCORE_BELOW_THRESHOLD));
+        assertEquals(UnknownInkClassification.SUBSTANTIAL_UNKNOWN,
+                UnknownInkClassifier.classify(
+                        fourMarks,
+                        com.maxello1.whamagic.magic.RecognitionRejectionReason.SCORE_BELOW_THRESHOLD));
+    }
+
+    @Test
+    public void recognizedModelsRejectNullIdentityAndSemantic() {
+        assertThrows(NullPointerException.class, () -> new RecognizedSigil(
+                null, null, SigilSemantic.empty(), 1.0, null, null, 0,
+                List.of(), List.of(), null));
+        assertThrows(NullPointerException.class, () -> new RecognizedSigil(
+                Identifier.tryParse("wha-magic:earth"), null, null, 1.0, null, null, 0,
+                List.of(), List.of(), null));
+        assertThrows(NullPointerException.class, () -> new RecognizedSign(
+                0, null, 1.0, 0, 0, "sign", SignSemantic.empty(),
+                List.of(), null, null, List.of(), null));
+        assertThrows(NullPointerException.class, () -> new RecognizedSign(
+                0, "wha-magic:column", 1.0, 0, 0, "sign", null,
+                List.of(), null, null, List.of(), null));
+    }
+
+    @Test
+    public void spellIrPreservesSignOrderWithoutMutableMapLeakage() {
+        Map<Identifier, Integer> ordered = new LinkedHashMap<>();
+        ordered.put(Identifier.tryParse("wha-magic:levitation"), 2);
+        ordered.put(Identifier.tryParse("wha-magic:column"), 1);
+        var ir = new com.maxello1.whamagic.magic.SpellIr(
+                SpellState.DRAFT, null, List.of(), ordered, null, List.of(), "", "");
+
+        assertEquals(List.of("levitation", "column"), ir.signCounts().keySet().stream()
+                .map(Identifier::getPath).toList());
+        assertThrows(UnsupportedOperationException.class,
+                () -> ir.signCounts().put(Identifier.tryParse("wha-magic:convergence"), 1));
+    }
+
+    private static List<Point> shortMark(double y) {
+        return List.of(
+                new Point(0.10, y), new Point(0.14, y),
+                new Point(0.18, y), new Point(0.22, y));
     }
 
     private static Stream<File> fixtureFiles() {

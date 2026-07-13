@@ -67,6 +67,7 @@ public class RecognitionMetricsTest {
         int confidenceGapCount = 0;
         int maxCandidates = 0;
         int maxRecognitionCalls = 0;
+        long[] maxRingWork = new long[3]; // combinations, fits, elapsed nanos
 
         List<String> falsePositiveDetails = new ArrayList<>();
         List<String> falseRejectionDetails = new ArrayList<>();
@@ -101,6 +102,7 @@ public class RecognitionMetricsTest {
 
             List<List<Point>> strokes = parseStrokes(fixture);
             SpellParser.ParseResult result = SpellParser.parse(strokes);
+            updateMaxRingWork(maxRingWork, result);
 
             // Determinism check: run again and verify full structural fingerprint
             SpellParser.ParseResult result2 = SpellParser.parse(strokes);
@@ -220,6 +222,7 @@ public class RecognitionMetricsTest {
 
             List<List<Point>> strokes = parseStrokes(fixture);
             SpellParser.ParseResult result = SpellParser.parse(strokes);
+            updateMaxRingWork(maxRingWork, result);
 
             // Determinism check
             SpellParser.ParseResult result2 = SpellParser.parse(strokes);
@@ -268,6 +271,7 @@ public class RecognitionMetricsTest {
             List<List<Point>> strokes = parseStrokes(fixture);
             long parseStartNanos = System.nanoTime();
             SpellParser.ParseResult result = SpellParser.parse(strokes);
+            updateMaxRingWork(maxRingWork, result);
             double parseDurationMs = (System.nanoTime() - parseStartNanos) / 1_000_000.0;
 
             // Determinism check
@@ -327,6 +331,7 @@ public class RecognitionMetricsTest {
 
             List<List<Point>> strokes = parseStrokes(fixture);
             SpellParser.ParseResult result = SpellParser.parse(strokes);
+            updateMaxRingWork(maxRingWork, result);
 
             // Determinism check
             SpellParser.ParseResult result2 = SpellParser.parse(strokes);
@@ -379,6 +384,7 @@ public class RecognitionMetricsTest {
 
             List<List<Point>> strokes = parseStrokes(fixture);
             SpellParser.ParseResult result = SpellParser.parse(strokes);
+            updateMaxRingWork(maxRingWork, result);
 
             // Track limits
             if (result.debugResult != null) {
@@ -407,6 +413,7 @@ public class RecognitionMetricsTest {
 
             List<List<Point>> strokes = parseStrokes(fixture);
             SpellParser.ParseResult result = SpellParser.parse(strokes);
+            updateMaxRingWork(maxRingWork, result);
 
             // Track limits
             if (result.debugResult != null) {
@@ -438,6 +445,9 @@ public class RecognitionMetricsTest {
                 confidenceGapCount > 0 ? totalConfidenceGap / confidenceGapCount : 0));
         report.append(String.format("Max candidates:      %d\n", maxCandidates));
         report.append(String.format("Max recognition calls: %d\n", maxRecognitionCalls));
+        report.append(String.format("Max ring combinations: %d\n", maxRingWork[0]));
+        report.append(String.format("Max ring fits:       %d\n", maxRingWork[1]));
+        report.append(String.format("Max ring elapsed:    %.3f ms\n", maxRingWork[2] / 1_000_000.0));
 
         if (!confusionPairs.isEmpty()) {
             report.append("\n=== Confusion Pairs ===\n");
@@ -966,6 +976,13 @@ public class RecognitionMetricsTest {
         }
         out.append(String.format("    Expected '%s' best: %.3f (via %s)\n", expectedId, expectedBestScore, expectedBestKind));
         out.append("\n");
+    }
+
+    private static void updateMaxRingWork(long[] maxima, SpellParser.ParseResult result) {
+        if (result.debugResult == null) return;
+        maxima[0] = Math.max(maxima[0], result.debugResult.ringCombinationsConsidered());
+        maxima[1] = Math.max(maxima[1], result.debugResult.ringFitsAttempted());
+        maxima[2] = Math.max(maxima[2], result.debugResult.ringElapsedNanos());
     }
 
     /** Associates a RecognitionAlternative with its source context for diagnostic lookup. */

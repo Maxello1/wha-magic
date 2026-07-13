@@ -27,6 +27,8 @@ the safeguards against merged unrelated symbols.
 
 Unknown ink retains the existing micro-noise limits: fewer than four points,
 path length below `0.10`, or both dimensions below `0.07`. A new harmless class
-is limited to one stroke with path length at most `0.18` and bounding diagonal at
-most `0.18`. Those limits describe short incidental marks; larger unexplained or
+allows up to three grouped strokes when every stroke is individually noise or
+has path length at most `0.18` and bounding diagonal at most `0.18`. The small
+group cap prevents candidate grouping from changing incidental marks into an
+error while larger accumulations still fail closed. Larger unexplained or
 ambiguous input invalidates compiled spell IR.

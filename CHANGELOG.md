@@ -1,5 +1,15 @@
 # WHA-Magic Changelog
 
+## [0.3.2-alpha.1] - 2026-07-13
+### Changed
+- Added recognizer-neutral symbol results and propagated sigil semantics into compiled spells.
+- Added per-symbol point-cloud acceptance rules, including structural and soft stroke-count controls.
+- Added explicit unknown-ink classification so ambiguous, substantial, or budget-skipped ink fails closed while harmless micro-noise remains valid.
+
+### Fixed
+- Preserved full recognized-sign provenance and immutable source ownership through the recognition pipeline.
+- Allowed equivalent open symbols drawn with merged or split pen strokes without lowering recognition thresholds.
+
 ## [0.2.0] - 2026-07-12
 ### Added
 - Implemented Multi-Sigil Recognition! The spell parser can now recognize multiple separate sigils and signs within a single drawing and compile them together.

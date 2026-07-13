@@ -11,9 +11,10 @@ final class UnknownInkClassifier {
     private static final int NOISE_POINT_COUNT = 4;
     private static final double NOISE_DIMENSION = 0.07;
 
-    // A single short mark can be retained for diagnostics without invalidating a spell.
+    // A small group of short marks can remain diagnostic-only without invalidating a spell.
     private static final double HARMLESS_PATH_LENGTH = 0.18;
     private static final double HARMLESS_DIAGONAL = 0.18;
+    private static final int MAX_GROUPED_HARMLESS_STROKES = 3;
 
     private UnknownInkClassifier() {}
 
@@ -21,20 +22,30 @@ final class UnknownInkClassifier {
             List<List<Point>> strokes,
             RecognitionRejectionReason rejectionReason) {
         Geometry geometry = geometry(strokes);
-        if (geometry.pointCount < NOISE_POINT_COUNT
-                || geometry.pathLength < NOISE_PATH_LENGTH
-                || (geometry.width < NOISE_DIMENSION && geometry.height < NOISE_DIMENSION)) {
+        if (isNoiseGeometry(geometry)) {
             return UnknownInkClassification.NOISE;
         }
         if (rejectionReason == RecognitionRejectionReason.AMBIGUOUS_TOP_MATCHES) {
             return UnknownInkClassification.AMBIGUOUS;
         }
-        if (strokes.size() == 1
-                && geometry.pathLength <= HARMLESS_PATH_LENGTH
-                && Math.hypot(geometry.width, geometry.height) <= HARMLESS_DIAGONAL) {
+        if (strokes.size() <= MAX_GROUPED_HARMLESS_STROKES
+                && strokes.stream().allMatch(UnknownInkClassifier::isIndividuallyHarmless)) {
             return UnknownInkClassification.HARMLESS_UNEXPLAINED;
         }
         return UnknownInkClassification.SUBSTANTIAL_UNKNOWN;
+    }
+
+    private static boolean isIndividuallyHarmless(List<Point> stroke) {
+        Geometry geometry = geometry(List.of(stroke));
+        return isNoiseGeometry(geometry)
+                || (geometry.pathLength <= HARMLESS_PATH_LENGTH
+                    && Math.hypot(geometry.width, geometry.height) <= HARMLESS_DIAGONAL);
+    }
+
+    private static boolean isNoiseGeometry(Geometry geometry) {
+        return geometry.pointCount < NOISE_POINT_COUNT
+                || geometry.pathLength < NOISE_PATH_LENGTH
+                || (geometry.width < NOISE_DIMENSION && geometry.height < NOISE_DIMENSION);
     }
 
     static boolean isNoise(List<List<Point>> strokes) {
