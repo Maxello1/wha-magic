@@ -18,28 +18,13 @@ import java.util.List;
  * (Raster, $P, $P+, and future $Q) can be swapped in SelectionEngine
  * without code changes.</p>
  *
- * <p>Lifecycle:</p>
- * <ol>
- *   <li>{@link #clearTemplates()} — reset before loading</li>
- *   <li>{@link #registerTemplate} — load all templates from dictionary</li>
- *   <li>{@link #recognize} — called per candidate during spell parsing</li>
- * </ol>
+ * <p>Recognizer implementations consume the immutable active dictionary
+ * snapshot and never mutate template state during recognition.</p>
  */
 public interface SymbolRecognizer {
 
     /** Human-readable name for logging and benchmark reports. */
     String name();
-
-    /** Remove all registered templates. Called before (re-)loading the dictionary. */
-    void clearTemplates();
-
-    /** Register a template from stroke data. */
-    void registerTemplate(String id, String displayName,
-                          SymbolKind kind, String element,
-                          List<List<Point>> strokes,
-                          com.maxello1.whamagic.magic.SigilSemantic sigilSemantic,
-                          com.maxello1.whamagic.magic.SignSemantic signSemantic,
-                          com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules);
 
     /** How many templates are loaded. */
     int getTemplateCount();

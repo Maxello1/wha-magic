@@ -74,6 +74,17 @@ public class RingDetector {
     private static final double MAX_ENDPOINT_GAP_RADIUS_RATIO = 0.25;
 
     /**
+     * A hand-drawn circle may briefly overtrace its closure. That adds local
+     * radial/path error without producing the long straight-edge tangent profile
+     * of a polygon. These limits apply only to closed single-stroke candidates.
+     */
+    private static final double ROUGH_MAX_NORMALIZED_RMSE = 0.075;
+    private static final double ROUGH_MAX_NORMALIZED_RESIDUAL = 0.12;
+    private static final double ROUGH_MAX_MEDIAN_TANGENT_ALIGNMENT = 0.15;
+    private static final double ROUGH_MAX_P90_TANGENT_ALIGNMENT = 0.28;
+    private static final double ROUGH_MIN_CIRCULARITY = 0.90;
+
+    /**
      * Validation thresholds for circle-vs-polygon rejection.
      * Tuned against the ring_shapes fixture suite.
      */
@@ -341,10 +352,7 @@ public class RingDetector {
         // ---- Gate 2: Normalized RMSE ----
         if (normalizedRmse > thresholds.maxNormalizedRmse) return null;
 
-        // ---- Gate 3: Maximum normalized radial residual ----
-        if (maxResidual > thresholds.maxNormalizedResidual) return null;
-
-        // ---- Gate 4: Radial residual standard deviation ----
+        // ---- Gate 3: Radial residual standard deviation ----
         if (residualStdDev > thresholds.maxResidualStdDev) return null;
 
         // ---- Tangent-to-radius alignment (per-stroke, skip endpoints) ----
@@ -388,9 +396,21 @@ public class RingDetector {
             p90TangentAlignment = sorted[Math.min(p90Index, sorted.length - 1)];
         }
 
-        // ---- Gate 5: Tangent alignment ----
-        if (medianTangentAlignment > thresholds.maxMedianTangentAlignment) return null;
-        if (p90TangentAlignment > thresholds.maxP90TangentAlignment) return null;
+        boolean roughClosedStrokeProfile = candidateStrokes.size() == 1
+                && normalizedRmse <= ROUGH_MAX_NORMALIZED_RMSE
+                && medianTangentAlignment <= ROUGH_MAX_MEDIAN_TANGENT_ALIGNMENT
+                && p90TangentAlignment <= ROUGH_MAX_P90_TANGENT_ALIGNMENT;
+
+        // ---- Gate 4: Tangent alignment ----
+        if (medianTangentAlignment > thresholds.maxMedianTangentAlignment
+                && !roughClosedStrokeProfile) return null;
+        if (p90TangentAlignment > thresholds.maxP90TangentAlignment
+                && !roughClosedStrokeProfile) return null;
+
+        // ---- Gate 5: Maximum radial residual ----
+        if (maxResidual > thresholds.maxNormalizedResidual
+                && !(roughClosedStrokeProfile
+                    && maxResidual <= ROUGH_MAX_NORMALIZED_RESIDUAL)) return null;
 
         // ---- Circularity for closed single-stroke candidates ----
         double circularity = 0;
@@ -420,7 +440,9 @@ public class RingDetector {
                 }
 
                 // ---- Gate 6: Circularity (single-stroke only) ----
-                if (circularity < thresholds.minCircularity) return null;
+                if (circularity < thresholds.minCircularity
+                        && !(roughClosedStrokeProfile
+                            && circularity >= ROUGH_MIN_CIRCULARITY)) return null;
             }
         }
 

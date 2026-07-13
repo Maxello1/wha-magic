@@ -6,6 +6,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.maxello1.whamagic.magic.*;
 import com.maxello1.whamagic.parser.Point;
+import com.maxello1.whamagic.parser.PointCloudRecognizer;
+import com.maxello1.whamagic.parser.SpellDictionary;
 import com.maxello1.whamagic.parser.SpellParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +16,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
@@ -46,6 +49,19 @@ public class SampleRecorder {
             File file = new File(dir, "sample_" + timestamp + ".json");
 
             JsonObject root = new JsonObject();
+            SpellDictionary.DictionarySnapshot dictionary = SpellDictionary.snapshot();
+            root.addProperty("formatVersion", 3);
+            root.addProperty("recognizerVersion", PointCloudRecognizer.RECOGNIZER_VERSION);
+            root.addProperty("dictionaryVersion", dictionary.version());
+            root.addProperty("dictionaryHash", dictionary.hash());
+            root.addProperty("sampleRole", "experimental");
+            JsonObject expectedIntent = new JsonObject();
+            expectedIntent.add("sigils", new JsonArray());
+            expectedIntent.add("signs", new JsonArray());
+            root.add("expectedIntent", expectedIntent);
+            root.addProperty("notes", notes == null ? "" : notes);
+            root.addProperty("sourceDate", LocalDate.now().toString());
+            root.addProperty("influencedTemplateOrThreshold", false);
             root.addProperty("timestamp", LocalDateTime.now().toString());
 
             // Raw strokes
@@ -55,8 +71,8 @@ public class SampleRecorder {
                     JsonArray strokeArray = new JsonArray();
                     for (Point p : stroke) {
                         JsonObject point = new JsonObject();
-                        point.addProperty("x", Math.round(p.x * 10000.0) / 10000.0);
-                        point.addProperty("y", Math.round(p.y * 10000.0) / 10000.0);
+                        point.addProperty("x", p.x);
+                        point.addProperty("y", p.y);
                         strokeArray.add(point);
                     }
                     strokesArray.add(strokeArray);
@@ -76,6 +92,7 @@ public class SampleRecorder {
                         for (RecognizedSigil sigil : result.ast.sigils()) {
                             JsonObject s = new JsonObject();
                             s.addProperty("id", sigil.id() != null ? sigil.id().toString() : "null");
+                            s.addProperty("matchedTemplateId", sigil.matchedTemplateId());
                             s.addProperty("element", sigil.element() != null ? sigil.element().name() : "null");
                             s.addProperty("confidence", Math.round(sigil.recognitionConfidence() * 1000.0) / 1000.0);
                             s.addProperty("rejectionReason", sigil.rejectionReason().name());
@@ -92,6 +109,7 @@ public class SampleRecorder {
                         for (RecognizedSign sign : result.ast.signs()) {
                             JsonObject s = new JsonObject();
                             s.addProperty("id", sign.id());
+                            s.addProperty("matchedTemplateId", sign.matchedTemplateId());
                             s.addProperty("confidence", Math.round(sign.confidence() * 1000.0) / 1000.0);
                             s.addProperty("angleAroundRing", Math.round(sign.angleAroundRing() * 100.0) / 100.0);
                             s.add("sourceStrokeIndices", GSON.toJsonTree(sign.sourceStrokeIndices()));
@@ -134,10 +152,6 @@ public class SampleRecorder {
                 }
 
                 root.add("result", resultObj);
-            }
-
-            if (notes != null && !notes.isEmpty()) {
-                root.addProperty("notes", notes);
             }
 
             try (FileWriter writer = new FileWriter(file)) {

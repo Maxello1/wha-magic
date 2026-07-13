@@ -18,7 +18,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Raster-based template matcher ported from wha-spell-simulator's templateMatcher.js.
@@ -53,27 +55,28 @@ public class RasterRecognizer {
     private static final double MIN_DIMENSION_RATIO_SIGIL = 0.12;
     private static final double MIN_DIMENSION_RATIO_SIGN = 0.05;
 
-    private static final List<RasterTemplate> templates = new ArrayList<>();
-
     // ---- Data Structures ----
 
-    public static class RasterTemplate {
-        public final String id;
-        public final String displayName;
-        public final com.maxello1.whamagic.magic.SymbolKind kind;
-        public final String element;
-        public final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
-        public final com.maxello1.whamagic.magic.SignSemantic signSemantic;
-        public final List<List<Point>> rawStrokes;
-        public final InkLayers ink; // pre-rendered at load time
-        public final TemplateFeatures features;
-        public final com.maxello1.whamagic.magic.TemplateComplexity complexity;
-        public final com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules;
+    static final class RasterTemplate {
+        private final String semanticId;
+        private final String templateId;
+        private final String displayName;
+        private final com.maxello1.whamagic.magic.SymbolKind kind;
+        private final String element;
+        private final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
+        private final com.maxello1.whamagic.magic.SignSemantic signSemantic;
+        private final List<List<Point>> rawStrokes;
+        private final InkLayers ink;
+        private final TemplateFeatures features;
+        private final com.maxello1.whamagic.magic.TemplateComplexity complexity;
+        private final com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules;
 
-        public RasterTemplate(String id, String displayName, com.maxello1.whamagic.magic.SymbolKind kind, String element, List<List<Point>> strokes,
+        private RasterTemplate(String semanticId, String templateId, String displayName,
+                              com.maxello1.whamagic.magic.SymbolKind kind, String element, List<List<Point>> strokes,
                               com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem,
                               com.maxello1.whamagic.magic.SymbolRecognitionRules rules) {
-            this.id = id;
+            this.semanticId = semanticId;
+            this.templateId = templateId;
             this.displayName = displayName;
             this.kind = kind;
             this.element = element;
@@ -101,7 +104,7 @@ public class RasterRecognizer {
             this.complexity = computeTemplateComplexity(norm, this.ink, this.rawStrokes);
             
             LOGGER.debug("Loaded raster template '{}': {} strokes, aspect={}, coreInk={}, complexity.pathLen={}",
-                    id, this.rawStrokes.size(), norm.sourceAspectRatio, this.ink.coreInk,
+                    templateId, this.rawStrokes.size(), norm.sourceAspectRatio, this.ink.coreInk,
                     String.format("%.3f", this.complexity.pathLength()));
         }
 
@@ -196,23 +199,15 @@ public class RasterRecognizer {
 
     // ---- Public API ----
 
-    public static void addTemplate(String id, String displayName, com.maxello1.whamagic.magic.SymbolKind kind, String element, List<List<Point>> strokes,
-                                   com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem) {
-        addTemplate(id, displayName, kind, element, strokes, sigilSem, signSem, null);
-    }
-
-    public static void addTemplate(String id, String displayName, com.maxello1.whamagic.magic.SymbolKind kind, String element, List<List<Point>> strokes,
-                                   com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem,
-                                   com.maxello1.whamagic.magic.SymbolRecognitionRules rules) {
-        templates.add(new RasterTemplate(id, displayName, kind, element, strokes, sigilSem, signSem, rules));
-    }
-
-    public static void clearTemplates() {
-        templates.clear();
+    static RasterTemplate buildTemplate(DictionaryTemplate definition) {
+        return new RasterTemplate(
+                definition.semanticId(), definition.templateId(), definition.displayName(),
+                definition.kind(), definition.element(), definition.strokes(),
+                definition.sigilSemantic(), definition.signSemantic(), definition.recognitionRules());
     }
 
     public static int getTemplateCount() {
-        return templates.size();
+        return SpellDictionary.rasterTemplates().size();
     }
 
     /**
@@ -248,7 +243,7 @@ public class RasterRecognizer {
         // Collect all scored alternatives
         List<ScoredAlternative> scored = new ArrayList<>();
 
-        for (RasterTemplate template : templates) {
+        for (RasterTemplate template : SpellDictionary.rasterTemplates()) {
             if (expectedKind != null && template.kind != expectedKind) {
                 continue;
             }
@@ -285,7 +280,7 @@ public class RasterRecognizer {
             }
 
             LOGGER.debug("  vs '{}': ink={} explained={} covered={} dice={} struct={} (aspect={} count={} profile={}) -> conf={}",
-                    template.id,
+                    template.templateId,
                     String.format("%.3f", inkScores.inkScore),
                     String.format("%.3f", inkScores.candidateExplainedRatio),
                     String.format("%.3f", inkScores.templateCoveredRatio),
@@ -307,20 +302,30 @@ public class RasterRecognizer {
                     MIN_CONFIDENCE);
         }
 
-        // Sort by confidence descending
-        scored.sort((a, b) -> Double.compare(b.confidence, a.confidence));
+        scored.sort((a, b) -> {
+            int scoreOrder = Double.compare(b.confidence, a.confidence);
+            if (scoreOrder != 0) return scoreOrder;
+            int semanticOrder = a.template.semanticId.compareTo(b.template.semanticId);
+            if (semanticOrder != 0) return semanticOrder;
+            return a.template.templateId.compareTo(b.template.templateId);
+        });
+        Map<String, ScoredAlternative> bestVariantBySemanticId = new LinkedHashMap<>();
+        for (ScoredAlternative score : scored) {
+            bestVariantBySemanticId.putIfAbsent(score.template.semanticId, score);
+        }
+        List<ScoredAlternative> semanticScores = List.copyOf(bestVariantBySemanticId.values());
 
-        ScoredAlternative best = scored.get(0);
-        double secondScore = scored.size() > 1 ? scored.get(1).confidence : -1;
+        ScoredAlternative best = semanticScores.get(0);
+        double secondScore = semanticScores.size() > 1 ? semanticScores.get(1).confidence : -1;
         double gap = secondScore >= 0 ? best.confidence - secondScore : best.confidence;
 
         // Build top 5 alternatives
         List<com.maxello1.whamagic.magic.RecognitionAlternative> alternatives = new ArrayList<>();
-        int altCount = Math.min(5, scored.size());
+        int altCount = Math.min(5, semanticScores.size());
         for (int i = 0; i < altCount; i++) {
-            ScoredAlternative alt = scored.get(i);
+            ScoredAlternative alt = semanticScores.get(i);
             alternatives.add(new com.maxello1.whamagic.magic.RecognitionAlternative(
-                    net.minecraft.resources.Identifier.tryParse(alt.template.id),
+                    net.minecraft.resources.Identifier.tryParse(alt.template.semanticId),
                     alt.template.displayName,
                     alt.template.kind,
                     alt.confidence,
@@ -347,9 +352,9 @@ public class RasterRecognizer {
         else if (ambiguous) {
             // Check if structural score can disambiguate
             boolean structurallyResolved = false;
-            if (scored.size() > 1) {
+            if (semanticScores.size() > 1) {
                 double bestStructural = best.structuralScore;
-                double secondStructural = scored.get(1).structuralScore;
+                double secondStructural = semanticScores.get(1).structuralScore;
                 // If the best match has significantly better structural fit,
                 // trust it despite the close raster scores
                 if (bestStructural - secondStructural >= 0.10) {
@@ -384,7 +389,8 @@ public class RasterRecognizer {
         String displayName = recognized ? best.template.displayName
                 : best.template.displayName + " (" + String.format("%.0f%%", best.confidence * 100) + ")";
 
-        return new SymbolRecognitionResult(recognized, best.template.id, displayName,
+        return new SymbolRecognitionResult(
+                recognized, best.template.semanticId, best.template.templateId, displayName,
                 best.template.kind, best.template.element, best.confidence,
                 best.template.sigilSemantic, best.template.signSemantic,
                 alternatives, gap, MIN_CONFIDENCE, reason,

@@ -32,3 +32,14 @@ has path length at most `0.18` and bounding diagonal at most `0.18`. The small
 group cap prevents candidate grouping from changing incidental marks into an
 error while larger accumulations still fail closed. Larger unexplained or
 ambiguous input invalidates compiled spell IR.
+
+## Ring closure overtrace
+
+Ring detection accepts a closed, single-stroke rough-circle profile when its
+normalized fit error is at most `0.075`, maximum radial residual is at most
+`0.12`, median tangent-to-radius alignment is at most `0.15`, 90th-percentile
+alignment is at most `0.28`, and circularity is at least `0.90`. This narrow
+profile handles the local path and radial error caused when a player briefly
+overtraces a circle's closure. It does not relax symbol recognition thresholds.
+Straight-edged polygons remain excluded by their tangent profile, and the
+existing stricter ring limits continue to apply to all other candidates.

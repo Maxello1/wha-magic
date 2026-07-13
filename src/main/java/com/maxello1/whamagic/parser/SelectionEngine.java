@@ -293,6 +293,7 @@ public class SelectionEngine {
                         
                         outSigils.add(new RecognizedSigil(
                             Identifier.tryParse(res.id()),
+                            res.matchedTemplateId(),
                             el,
                             res.sigilSemantic(),
                             res.score(),
@@ -307,6 +308,7 @@ public class SelectionEngine {
                         outSigns.add(new RecognizedSign(
                             eval.cand.id(),
                             res.id(),
+                            res.matchedTemplateId(),
                             res.score(),
                             eval.cand.angularPosition(),
                             eval.bestAngle,

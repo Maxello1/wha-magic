@@ -10,6 +10,7 @@ import java.util.List;
 public record SymbolRecognitionResult(
         boolean recognized,
         String id,
+        String matchedTemplateId,
         String displayName,
         SymbolKind kind,
         String element,
@@ -35,7 +36,7 @@ public record SymbolRecognitionResult(
             RecognitionRejectionReason reason,
             double thresholdUsed) {
         return new SymbolRecognitionResult(
-                false, null, displayName, null, null, 0.0,
+                false, null, null, displayName, null, null, 0.0,
                 null, null, List.of(), 0.0, thresholdUsed, reason,
                 0.0, 0.0, 0.0);
     }

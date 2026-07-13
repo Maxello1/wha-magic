@@ -156,6 +156,24 @@ public class RingDetectorTest {
     }
 
     @Test
+    public void playerCircleWithClosureOvertraceIsRemovedBeforeRecognition() throws Exception {
+        File file = new File(
+                "src/test/resources/fixtures/training_candidate/ring_player_overtrace.json");
+        JsonObject json = GSON.fromJson(new FileReader(file), JsonObject.class);
+        List<List<Point>> strokes = parseStrokes(json.getAsJsonArray("strokes"));
+
+        SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+        assertEquals(List.of(0), result.debugResult.ringStrokeIndices());
+        assertNotNull(result.ast.ring());
+        assertTrue(result.ast.unknownSymbols().isEmpty(),
+                "The accepted circle must be removed rather than emitted as UnknownSymbol");
+        assertTrue(result.ast.unknownInk().isEmpty(),
+                "The accepted circle must not become unexplained ink");
+        assertEquals(0, result.debugResult.recognitionCalls());
+    }
+
+    @Test
     public void testManyNonRingStrokesStayWithinDefaultBudget() throws Exception {
         File f = new File("src/test/resources/fixtures/canonical/ring_shapes/ring_many_non_ring_strokes.json");
         assertTrue(f.exists(), "Many-stroke ring stress fixture must exist");

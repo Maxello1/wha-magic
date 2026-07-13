@@ -53,6 +53,21 @@ tasks.withType(JavaCompile).configureEach {
 	it.options.release = 25
 }
 
+tasks.register("promoteSample", JavaExec) {
+	group = "development"
+	description = "Preview and promote an F5 recording into an explicitly classified fixture"
+	dependsOn classes
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = "com.maxello1.whamagic.dev.SamplePromotionTool"
+	standardInput = System.in
+	if (project.hasProperty("sample")) {
+		args project.property("sample")
+	}
+	if (project.hasProperty("previewOnly")) {
+		args "--preview-only"
+	}
+}
+
 java {
 	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
 	// if it is present.

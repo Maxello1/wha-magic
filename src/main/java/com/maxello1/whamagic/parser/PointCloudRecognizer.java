@@ -25,7 +25,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * $P Point-Cloud gesture recognizer.
@@ -41,6 +43,7 @@ import java.util.List;
  * </ol>
  */
 public class PointCloudRecognizer implements SymbolRecognizer {
+    public static final String RECOGNIZER_VERSION = "point-cloud-p-curvature-1";
 
     /** Singleton instance for use via the interface. */
     public static final PointCloudRecognizer INSTANCE = new PointCloudRecognizer();
@@ -107,21 +110,22 @@ public class PointCloudRecognizer implements SymbolRecognizer {
     }
 
     /** A normalized point-cloud template. */
-    public static class PointCloudTemplate {
-        public final String id;
-        public final String displayName;
-        public final com.maxello1.whamagic.magic.SymbolKind kind;
-        public final String element;
-        public final CloudPoint[] points; // always length N after normalization
-        public final int strokeCount; // original number of strokes in the template
-        public final int requiredClosedContourCount;
-        public final boolean closedSingleStroke;
-        public final double centralSymmetryError;
-        public final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
-        public final com.maxello1.whamagic.magic.SignSemantic signSemantic;
-        public final com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules;
+    static final class PointCloudTemplate {
+        private final String semanticId;
+        private final String templateId;
+        private final String displayName;
+        private final com.maxello1.whamagic.magic.SymbolKind kind;
+        private final String element;
+        private final CloudPoint[] points; // always length N after normalization
+        private final int strokeCount;
+        private final int requiredClosedContourCount;
+        private final boolean closedSingleStroke;
+        private final double centralSymmetryError;
+        private final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
+        private final com.maxello1.whamagic.magic.SignSemantic signSemantic;
+        private final com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules;
 
-        public PointCloudTemplate(String id, String displayName,
+        private PointCloudTemplate(String semanticId, String templateId, String displayName,
                                   com.maxello1.whamagic.magic.SymbolKind kind, String element,
                                   CloudPoint[] points, int strokeCount, int requiredClosedContourCount,
                                   boolean closedSingleStroke,
@@ -129,11 +133,12 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                                   com.maxello1.whamagic.magic.SigilSemantic sigilSemantic,
                                   com.maxello1.whamagic.magic.SignSemantic signSemantic,
                                   com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules) {
-            this.id = id;
+            this.semanticId = semanticId;
+            this.templateId = templateId;
             this.displayName = displayName;
             this.kind = kind;
             this.element = element;
-            this.points = points;
+            this.points = points.clone();
             this.strokeCount = strokeCount;
             this.requiredClosedContourCount = requiredClosedContourCount;
             this.closedSingleStroke = closedSingleStroke;
@@ -148,52 +153,18 @@ public class PointCloudRecognizer implements SymbolRecognizer {
 
     @Override public String name() { return "$P + curvature"; }
 
-    @Override public void clearTemplates() { templates.clear(); }
-
-    @Override
-    public void registerTemplate(String id, String displayName,
-                                 com.maxello1.whamagic.magic.SymbolKind kind, String element,
-                                 List<List<Point>> strokes,
-                                 com.maxello1.whamagic.magic.SigilSemantic sigilSemantic,
-                                 com.maxello1.whamagic.magic.SignSemantic signSemantic,
-                                 com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules) {
-        registerTemplateStatic(id, displayName, kind, element, strokes, sigilSemantic, signSemantic, recognitionRules);
-    }
-
-    @Override public int getTemplateCount() { return templates.size(); }
+    @Override public int getTemplateCount() { return SpellDictionary.pointCloudTemplates().size(); }
 
     @Override
     public SymbolRecognitionResult recognize(List<List<Point>> strokes, com.maxello1.whamagic.magic.SymbolKind expectedKind) {
         return recognizeStatic(strokes, expectedKind);
     }
 
-    // ---- Template Storage ----
-
-    private static final List<PointCloudTemplate> templates = new ArrayList<>();
-
-    /** @deprecated Use instance methods via SymbolRecognizer interface instead. */
-    public static void clearTemplatesStatic() {
-        templates.clear();
-    }
-
-    /**
-     * Register a template from stroke data (as stored in sigils.json/signs.json).
-     * The strokes are converted to a point cloud, resampled, and normalized.
-     */
-    public static void registerTemplateStatic(String id, String displayName,
-                                        com.maxello1.whamagic.magic.SymbolKind kind, String element,
-                                        List<List<Point>> strokes,
-                                        com.maxello1.whamagic.magic.SigilSemantic sigilSemantic,
-                                        com.maxello1.whamagic.magic.SignSemantic signSemantic,
-                                        com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules) {
-        com.maxello1.whamagic.magic.SymbolRecognitionRules effectiveRules = recognitionRules != null
-                ? recognitionRules
-                : (kind == com.maxello1.whamagic.magic.SymbolKind.SIGIL
-                    ? com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGIL_DEFAULTS
-                    : com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGN_DEFAULTS);
+    static PointCloudTemplate buildTemplate(DictionaryTemplate definition) {
+        List<List<Point>> strokes = definition.strokes();
         NormalizationAllocation allocation = normalizationAllocation(strokes);
         if (!allocation.supported()) {
-            throw new IllegalArgumentException("Template '" + id + "' has "
+            throw new IllegalArgumentException("Template '" + definition.templateId() + "' has "
                     + allocation.meaningfulStrokeCount() + " meaningful strokes; N=" + N
                     + " supports at most " + (N / MIN_POINTS_PER_MEANINGFUL_STROKE));
         }
@@ -202,15 +173,16 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         int requiredClosedContourCount = closedContourCount(strokes);
         boolean closedSingleStroke = isClosedSingleStroke(strokes);
         double symmetryError = closedSingleStroke ? centralSymmetryError(normalized) : 0.0;
-        templates.add(new PointCloudTemplate(id, displayName, kind, element, normalized, strokes.size(),
+        return new PointCloudTemplate(
+                definition.semanticId(), definition.templateId(), definition.displayName(),
+                definition.kind(), definition.element(), normalized, strokes.size(),
                 requiredClosedContourCount,
                 closedSingleStroke, symmetryError,
-                sigilSemantic, signSemantic, effectiveRules));
-        LOGGER.debug("Registered $P template '{}' ({} strokes -> {} points)", id, strokes.size(), N);
+                definition.sigilSemantic(), definition.signSemantic(), definition.recognitionRules());
     }
 
     public static int getTemplateCountStatic() {
-        return templates.size();
+        return SpellDictionary.pointCloudTemplates().size();
     }
 
     // ---- Recognition (Stage 1) ----
@@ -254,7 +226,7 @@ public class PointCloudRecognizer implements SymbolRecognizer {
 
         // Match against each template of the expected kind
         List<TemplateScore> scored = new ArrayList<>();
-        for (PointCloudTemplate tmpl : templates) {
+        for (PointCloudTemplate tmpl : SpellDictionary.pointCloudTemplates()) {
             if (tmpl.kind != expectedKind) continue;
             double distance = greedyCloudMatch(candidate, tmpl.points, N);
             double score = Math.max((2.0 - distance) / 2.0, 0.0);
@@ -298,20 +270,30 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                     defaultRules(expectedKind).minimumScore());
         }
 
-        // Sort by score descending
-        scored.sort((a, b) -> Double.compare(b.score, a.score));
+        scored.sort((a, b) -> {
+            int scoreOrder = Double.compare(b.score, a.score);
+            if (scoreOrder != 0) return scoreOrder;
+            int semanticOrder = a.template.semanticId.compareTo(b.template.semanticId);
+            if (semanticOrder != 0) return semanticOrder;
+            return a.template.templateId.compareTo(b.template.templateId);
+        });
 
-        TemplateScore best = scored.get(0);
-        double secondScore = scored.size() > 1 ? scored.get(1).score : 0;
+        Map<String, TemplateScore> bestVariantBySemanticId = new LinkedHashMap<>();
+        for (TemplateScore score : scored) {
+            bestVariantBySemanticId.putIfAbsent(score.template.semanticId, score);
+        }
+        List<TemplateScore> semanticScores = List.copyOf(bestVariantBySemanticId.values());
+        TemplateScore best = semanticScores.get(0);
+        double secondScore = semanticScores.size() > 1 ? semanticScores.get(1).score : 0;
         double gap = best.score - secondScore;
 
-        // Build alternatives list
+        // Alternatives expose each semantic symbol only once, using its best visual variant.
         List<com.maxello1.whamagic.magic.RecognitionAlternative> alternatives = new ArrayList<>();
-        int altCount = Math.min(5, scored.size());
+        int altCount = Math.min(5, semanticScores.size());
         for (int i = 0; i < altCount; i++) {
-            TemplateScore ts = scored.get(i);
+            TemplateScore ts = semanticScores.get(i);
             alternatives.add(new com.maxello1.whamagic.magic.RecognitionAlternative(
-                    net.minecraft.resources.Identifier.tryParse(ts.template.id),
+                    net.minecraft.resources.Identifier.tryParse(ts.template.semanticId),
                     ts.template.displayName,
                     ts.template.kind,
                     ts.score,
@@ -335,10 +317,11 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                 : best.template.displayName + " (" + String.format("%.0f%%", best.score * 100) + ")";
 
         LOGGER.debug("$P recognize: {} -> {} (score={}, gap={})",
-                expectedKind, best.template.id,
+                expectedKind, best.template.semanticId,
                 String.format("%.3f", best.score), String.format("%.3f", gap));
 
-        return new SymbolRecognitionResult(recognized, best.template.id, displayName,
+        return new SymbolRecognitionResult(
+                recognized, best.template.semanticId, best.template.templateId, displayName,
                 best.template.kind, best.template.element, best.score,
                 best.template.sigilSemantic, best.template.signSemantic,
                 alternatives, gap, bestRules.minimumScore(), reason,
@@ -376,14 +359,14 @@ public class PointCloudRecognizer implements SymbolRecognizer {
      * Higher = more precise drawing. Used for spell power calculation.
      *
      * @param strokes the player's drawn strokes
-     * @param templateId the recognized template ID to score against
+     * @param templateId exact visual template variant ID returned by recognition
      * @return quality score 0-100, or 0 if template not found
      */
     public static double computeQuality(List<List<Point>> strokes, String templateId) {
         // Find the template
         PointCloudTemplate tmpl = null;
-        for (PointCloudTemplate t : templates) {
-            if (t.id.equals(templateId)) {
+        for (PointCloudTemplate t : SpellDictionary.pointCloudTemplates()) {
+            if (t.templateId.equals(templateId)) {
                 tmpl = t;
                 break;
             }

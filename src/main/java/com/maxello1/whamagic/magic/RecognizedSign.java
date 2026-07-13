@@ -9,6 +9,7 @@ import java.util.Objects;
 public record RecognizedSign(
     int candidateId,
     String id,
+    String matchedTemplateId,
     double confidence,
     double angleAroundRing,
     double orientationDeg,
@@ -22,6 +23,7 @@ public record RecognizedSign(
 ) {
     public RecognizedSign {
         id = Objects.requireNonNull(id, "id");
+        matchedTemplateId = Objects.requireNonNull(matchedTemplateId, "matchedTemplateId");
         semantic = Objects.requireNonNull(semantic, "semantic");
         sourceStrokeIndices = sourceStrokeIndices == null ? List.of() : List.copyOf(sourceStrokeIndices);
         alternatives = alternatives == null ? List.of() : List.copyOf(alternatives);
