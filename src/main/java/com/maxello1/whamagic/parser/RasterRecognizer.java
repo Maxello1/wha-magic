@@ -12,6 +12,7 @@
  */
 package com.maxello1.whamagic.parser;
 
+import com.maxello1.whamagic.magic.SymbolRecognitionResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -193,58 +194,6 @@ public class RasterRecognizer {
         }
     }
 
-    public static class RecognitionResult {
-        public final boolean recognized;
-        public final String id;
-        public final String displayName;
-        public final com.maxello1.whamagic.magic.SymbolKind kind;
-        public final String element;
-        public final double score;
-        public final com.maxello1.whamagic.magic.SigilSemantic sigilSemantic;
-        public final com.maxello1.whamagic.magic.SignSemantic signSemantic;
-        // Diagnostic fields
-        public final List<com.maxello1.whamagic.magic.RecognitionAlternative> alternatives;
-        public final double confidenceGap;
-        public final double thresholdUsed;
-        public final com.maxello1.whamagic.magic.RecognitionRejectionReason rejectionReason;
-        public final double templateCoverage;
-        public final double unexplainedInkRatio;
-        public final double structuralScore;
-
-        public RecognitionResult(boolean recognized, String id, String displayName,
-                                 com.maxello1.whamagic.magic.SymbolKind kind, String element, double score,
-                                 com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem,
-                                 List<com.maxello1.whamagic.magic.RecognitionAlternative> alternatives,
-                                 double confidenceGap, double thresholdUsed,
-                                 com.maxello1.whamagic.magic.RecognitionRejectionReason rejectionReason,
-                                 double templateCoverage, double unexplainedInkRatio, double structuralScore) {
-            this.recognized = recognized;
-            this.id = id;
-            this.displayName = displayName;
-            this.kind = kind;
-            this.element = element;
-            this.score = score;
-            this.sigilSemantic = sigilSem;
-            this.signSemantic = signSem;
-            this.alternatives = alternatives != null ? alternatives : new ArrayList<>();
-            this.confidenceGap = confidenceGap;
-            this.thresholdUsed = thresholdUsed;
-            this.rejectionReason = rejectionReason;
-            this.templateCoverage = templateCoverage;
-            this.unexplainedInkRatio = unexplainedInkRatio;
-            this.structuralScore = structuralScore;
-        }
-
-        /** Convenience constructor for early-exit failures with no match data. */
-        public RecognitionResult(boolean recognized, String id, String displayName,
-                                 com.maxello1.whamagic.magic.SymbolKind kind, String element, double score,
-                                 com.maxello1.whamagic.magic.SigilSemantic sigilSem, com.maxello1.whamagic.magic.SignSemantic signSem,
-                                 com.maxello1.whamagic.magic.RecognitionRejectionReason rejectionReason) {
-            this(recognized, id, displayName, kind, element, score, sigilSem, signSem,
-                 new ArrayList<>(), 0, MIN_CONFIDENCE, rejectionReason, 0, 0, 0);
-        }
-    }
-
     // ---- Public API ----
 
     public static void addTemplate(String id, String displayName, com.maxello1.whamagic.magic.SymbolKind kind, String element, List<List<Point>> strokes,
@@ -270,19 +219,21 @@ public class RasterRecognizer {
      * Recognize drawn strokes against all registered templates of a specific kind.
      * Uses the raster ink overlay + structural feature scoring.
      *
-     * Returns a RecognitionResult with the top 5 alternatives and full diagnostic data.
+     * Returns a recognizer-neutral result with the top 5 alternatives and diagnostics.
      */
-    public static RecognitionResult recognize(List<List<Point>> strokes, com.maxello1.whamagic.magic.SymbolKind expectedKind) {
+    public static SymbolRecognitionResult recognize(List<List<Point>> strokes, com.maxello1.whamagic.magic.SymbolKind expectedKind) {
         if (strokes == null || strokes.isEmpty()) {
-            return new RecognitionResult(false, null, "No strokes", null, null, 0, null, null,
-                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES);
+            return SymbolRecognitionResult.rejected("No strokes",
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES,
+                    MIN_CONFIDENCE);
         }
 
         // Normalize candidate strokes
         TemplateNormalizer.NormalizedResult candidateNorm = TemplateNormalizer.normalize(strokes, SAMPLES_PER_STROKE);
         if (candidateNorm.strokes.isEmpty()) {
-            return new RecognitionResult(false, null, "No valid strokes", null, null, 0, null, null,
-                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES);
+            return SymbolRecognitionResult.rejected("No valid strokes",
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES,
+                    MIN_CONFIDENCE);
         }
 
         InkLayers candidateInk = renderInk(candidateNorm.strokes);
@@ -351,8 +302,9 @@ public class RasterRecognizer {
         }
 
         if (scored.isEmpty()) {
-            return new RecognitionResult(false, null, "No templates", null, null, 0, null, null,
-                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_TEMPLATES);
+            return SymbolRecognitionResult.rejected("No templates",
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_TEMPLATES,
+                    MIN_CONFIDENCE);
         }
 
         // Sort by confidence descending
@@ -432,7 +384,7 @@ public class RasterRecognizer {
         String displayName = recognized ? best.template.displayName
                 : best.template.displayName + " (" + String.format("%.0f%%", best.confidence * 100) + ")";
 
-        return new RecognitionResult(recognized, best.template.id, displayName,
+        return new SymbolRecognitionResult(recognized, best.template.id, displayName,
                 best.template.kind, best.template.element, best.confidence,
                 best.template.sigilSemantic, best.template.signSemantic,
                 alternatives, gap, MIN_CONFIDENCE, reason,

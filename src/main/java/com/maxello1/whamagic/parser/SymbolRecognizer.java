@@ -7,6 +7,7 @@
 package com.maxello1.whamagic.parser;
 
 import com.maxello1.whamagic.magic.SymbolKind;
+import com.maxello1.whamagic.magic.SymbolRecognitionResult;
 
 import java.util.List;
 
@@ -48,7 +49,7 @@ public interface SymbolRecognizer {
      *
      * @param strokes       the player's drawn strokes for this candidate
      * @param expectedKind  SIGIL or SIGN — only templates of this kind are tested
-     * @return recognition result compatible with SelectionEngine
+     * @return recognizer-neutral result consumed by SelectionEngine
      */
-    RasterRecognizer.RecognitionResult recognize(List<List<Point>> strokes, SymbolKind expectedKind);
+    SymbolRecognitionResult recognize(List<List<Point>> strokes, SymbolKind expectedKind);
 }

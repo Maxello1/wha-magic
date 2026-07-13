@@ -19,6 +19,7 @@
  */
 package com.maxello1.whamagic.parser;
 
+import com.maxello1.whamagic.magic.SymbolRecognitionResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,12 +55,6 @@ public class PointCloudRecognizer implements SymbolRecognizer {
 
     /** Controls step size in greedy cloud match. step = floor(N^(1-ε)). */
     private static final double EPSILON = 0.50;
-
-    /** Minimum score to consider a match valid. */
-    private static final double MIN_SCORE = 0.20;
-
-    /** Minimum gap between best and second-best to avoid ambiguity. */
-    private static final double MIN_GAP = 0.02;
 
     /** Weight of turning angle in $P+ distance calculation. */
     private static final double ANGLE_WEIGHT = 0.15;
@@ -168,7 +163,7 @@ public class PointCloudRecognizer implements SymbolRecognizer {
     @Override public int getTemplateCount() { return templates.size(); }
 
     @Override
-    public RasterRecognizer.RecognitionResult recognize(List<List<Point>> strokes, com.maxello1.whamagic.magic.SymbolKind expectedKind) {
+    public SymbolRecognitionResult recognize(List<List<Point>> strokes, com.maxello1.whamagic.magic.SymbolKind expectedKind) {
         return recognizeStatic(strokes, expectedKind);
     }
 
@@ -191,6 +186,11 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                                         com.maxello1.whamagic.magic.SigilSemantic sigilSemantic,
                                         com.maxello1.whamagic.magic.SignSemantic signSemantic,
                                         com.maxello1.whamagic.magic.SymbolRecognitionRules recognitionRules) {
+        com.maxello1.whamagic.magic.SymbolRecognitionRules effectiveRules = recognitionRules != null
+                ? recognitionRules
+                : (kind == com.maxello1.whamagic.magic.SymbolKind.SIGIL
+                    ? com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGIL_DEFAULTS
+                    : com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGN_DEFAULTS);
         NormalizationAllocation allocation = normalizationAllocation(strokes);
         if (!allocation.supported()) {
             throw new IllegalArgumentException("Template '" + id + "' has "
@@ -205,7 +205,7 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         templates.add(new PointCloudTemplate(id, displayName, kind, element, normalized, strokes.size(),
                 requiredClosedContourCount,
                 closedSingleStroke, symmetryError,
-                sigilSemantic, signSemantic, recognitionRules));
+                sigilSemantic, signSemantic, effectiveRules));
         LOGGER.debug("Registered $P template '{}' ({} strokes -> {} points)", id, strokes.size(), N);
     }
 
@@ -217,36 +217,40 @@ public class PointCloudRecognizer implements SymbolRecognizer {
 
     /**
      * Recognize a candidate drawing against all templates of a given kind.
-     * Returns a RasterRecognizer.RecognitionResult for compatibility with SelectionEngine.
+     * Returns the shared recognizer-neutral result consumed by SelectionEngine.
      *
      * @param strokes  the player's drawn strokes
      * @param expectedKind  SIGIL or SIGN — only templates of this kind are tested
      * @return recognition result with match info and alternatives
      */
-    public static RasterRecognizer.RecognitionResult recognizeStatic(List<List<Point>> strokes,
+    public static SymbolRecognitionResult recognizeStatic(List<List<Point>> strokes,
                                                                com.maxello1.whamagic.magic.SymbolKind expectedKind) {
         if (strokes == null || strokes.isEmpty()) {
-            return new RasterRecognizer.RecognitionResult(false, null, "Unknown", null, null, 0,
-                    null, null, com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES);
+            return SymbolRecognitionResult.rejected("Unknown",
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES,
+                    defaultRules(expectedKind).minimumScore());
         }
 
         NormalizationAllocation allocation = normalizationAllocation(strokes);
         if (!allocation.supported()) {
-            return new RasterRecognizer.RecognitionResult(false, null, "Unknown", null, null, 0,
-                    null, null,
-                    com.maxello1.whamagic.magic.RecognitionRejectionReason.UNSUPPORTED_COMPLEXITY);
+            return SymbolRecognitionResult.rejected("Unknown",
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.UNSUPPORTED_COMPLEXITY,
+                    defaultRules(expectedKind).minimumScore());
         }
 
         // Convert and normalize candidate
         CloudPoint[] candidateCloud = strokesToCloud(strokes);
         if (candidateCloud.length < 3) {
-            return new RasterRecognizer.RecognitionResult(false, null, "Unknown", null, null, 0,
-                    null, null, com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES);
+            return SymbolRecognitionResult.rejected("Unknown",
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_STROKES,
+                    defaultRules(expectedKind).minimumScore());
         }
         CloudPoint[] candidate = normalize(candidateCloud, N);
         int candidateClosedContourCount = closedContourCount(strokes);
         boolean candidateClosedSingleStroke = isClosedSingleStroke(strokes);
         double candidateSymmetryError = candidateClosedSingleStroke ? centralSymmetryError(candidate) : 0.0;
+        double candidateComplexity = candidateComplexity(strokes);
+        double candidateDimensionRatio = candidateDimensionRatio(strokes);
 
         // Match against each template of the expected kind
         List<TemplateScore> scored = new ArrayList<>();
@@ -259,40 +263,39 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                     && candidateSymmetryError < tmpl.centralSymmetryError * MIN_ASYMMETRY_RATIO) {
                 score = 0.0;
             }
-            // Structural completeness and stroke-count safeguards:
-            // 1. Closed templates require all meaningful contours, independent of pen lifts/joins.
-            // 2. Fewer strokes are allowed only when those required contours survive, with a mild penalty.
-            // 3. Too many extra strokes are rejected above double the template count.
-            // 4. Moderate extra strokes receive the existing mild penalty. This is important for multi-symbol spells where
-            //    CandidateGenerator might group multiple symbols into a single super-candidate (e.g. 7 wind + 2 column = 9 strokes).
+            com.maxello1.whamagic.magic.SymbolRecognitionRules rules = tmpl.recognitionRules;
             int candidateStrokeCount = strokes.size();
-            int templateStrokeCount = tmpl.strokeCount;
-            boolean preservesRequiredClosedContours =
-                    candidateClosedContourCount >= tmpl.requiredClosedContourCount;
-            if (!preservesRequiredClosedContours) {
+            int requiredClosedContours = rules.minimumClosedContours() >= 0
+                    ? rules.minimumClosedContours()
+                    : tmpl.requiredClosedContourCount;
+            com.maxello1.whamagic.magic.RecognitionRejectionReason structuralRejection =
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE;
+
+            if (candidateClosedContourCount < requiredClosedContours
+                    || candidateComplexity < rules.minimumComplexity()
+                    || (!rules.allowLineLike()
+                        && candidateDimensionRatio < rules.minimumDimensionRatio())) {
                 score = 0;
-            } else if (candidateStrokeCount < templateStrokeCount) {
-                if (tmpl.requiredClosedContourCount > 0) {
-                    double ratio = (double) candidateStrokeCount / templateStrokeCount;
-                    score *= Math.pow(ratio, 0.5);
-                } else {
-                    // Open templates still require their full stroke structure.
-                    score = 0;
+                structuralRejection = com.maxello1.whamagic.magic.RecognitionRejectionReason.INSUFFICIENT_GEOMETRY;
+            } else {
+                int softMinimum = rules.softMinimumStrokeCount();
+                int softMaximum = rules.softMaximumStrokeCount() == 0
+                        ? tmpl.strokeCount
+                        : rules.softMaximumStrokeCount();
+                if (softMinimum > 0 && candidateStrokeCount < softMinimum) {
+                    score *= Math.sqrt((double) candidateStrokeCount / softMinimum);
                 }
-            } else if (candidateStrokeCount > templateStrokeCount * 2) {
-                // More than double the strokes: reject (e.g. 5-stroke candidate vs 1-stroke template)
-                score = 0;
-            } else if (candidateStrokeCount > templateStrokeCount) {
-                // Moderate extra strokes: mild proportional penalty
-                double ratio = (double) templateStrokeCount / candidateStrokeCount;
-                score *= Math.pow(ratio, 0.5);
+                if (softMaximum > 0 && candidateStrokeCount > softMaximum) {
+                    score *= Math.sqrt((double) softMaximum / candidateStrokeCount);
+                }
             }
-            scored.add(new TemplateScore(tmpl, score, distance));
+            scored.add(new TemplateScore(tmpl, score, distance, structuralRejection));
         }
 
         if (scored.isEmpty()) {
-            return new RasterRecognizer.RecognitionResult(false, null, "Unknown", null, null, 0,
-                    null, null, com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_TEMPLATES);
+            return SymbolRecognitionResult.rejected("Unknown",
+                    com.maxello1.whamagic.magic.RecognitionRejectionReason.NO_TEMPLATES,
+                    defaultRules(expectedKind).minimumScore());
         }
 
         // Sort by score descending
@@ -322,14 +325,9 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         }
 
         // Apply gates
-        com.maxello1.whamagic.magic.RecognitionRejectionReason reason =
-                com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE;
-
-        if (best.score < MIN_SCORE) {
-            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.SCORE_BELOW_THRESHOLD;
-        } else if (gap < MIN_GAP && secondScore > 0) {
-            reason = com.maxello1.whamagic.magic.RecognitionRejectionReason.AMBIGUOUS_TOP_MATCHES;
-        }
+        com.maxello1.whamagic.magic.SymbolRecognitionRules bestRules = best.template.recognitionRules;
+        com.maxello1.whamagic.magic.RecognitionRejectionReason reason = acceptanceReason(
+                best.score, secondScore, best.structuralRejection, bestRules);
 
         boolean recognized = reason == com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE;
 
@@ -340,11 +338,35 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                 expectedKind, best.template.id,
                 String.format("%.3f", best.score), String.format("%.3f", gap));
 
-        return new RasterRecognizer.RecognitionResult(recognized, best.template.id, displayName,
+        return new SymbolRecognitionResult(recognized, best.template.id, displayName,
                 best.template.kind, best.template.element, best.score,
                 best.template.sigilSemantic, best.template.signSemantic,
-                alternatives, gap, MIN_SCORE, reason,
+                alternatives, gap, bestRules.minimumScore(), reason,
                 best.score, 1.0 - best.score, best.score);
+    }
+
+    static com.maxello1.whamagic.magic.RecognitionRejectionReason acceptanceReason(
+            double bestScore,
+            double secondScore,
+            com.maxello1.whamagic.magic.RecognitionRejectionReason structuralRejection,
+            com.maxello1.whamagic.magic.SymbolRecognitionRules rules) {
+        if (structuralRejection != com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE) {
+            return structuralRejection;
+        }
+        if (bestScore < rules.minimumScore()) {
+            return com.maxello1.whamagic.magic.RecognitionRejectionReason.SCORE_BELOW_THRESHOLD;
+        }
+        if (secondScore > 0 && bestScore - secondScore < rules.minimumGap()) {
+            return com.maxello1.whamagic.magic.RecognitionRejectionReason.AMBIGUOUS_TOP_MATCHES;
+        }
+        return com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE;
+    }
+
+    private static com.maxello1.whamagic.magic.SymbolRecognitionRules defaultRules(
+            com.maxello1.whamagic.magic.SymbolKind kind) {
+        return kind == com.maxello1.whamagic.magic.SymbolKind.SIGIL
+                ? com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGIL_DEFAULTS
+                : com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGN_DEFAULTS;
     }
 
     // ---- Quality Scoring (Stage 2) ----
@@ -939,6 +961,40 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         return foundPoint ? Math.hypot(maxX - minX, maxY - minY) : 0.0;
     }
 
+    /** Path length normalized by the drawing diagonal, independent of scale. */
+    private static double candidateComplexity(List<List<Point>> strokes) {
+        double diagonal = drawingDiagonal(strokes);
+        if (diagonal < 1e-10) return 0.0;
+        double pathLength = 0.0;
+        for (List<Point> stroke : strokes) {
+            for (int i = 1; i < stroke.size(); i++) {
+                pathLength += distance(stroke.get(i - 1), stroke.get(i));
+            }
+        }
+        return pathLength / diagonal;
+    }
+
+    /** Ratio of the shorter drawing dimension to the longer one. */
+    private static double candidateDimensionRatio(List<List<Point>> strokes) {
+        double minX = Double.POSITIVE_INFINITY;
+        double minY = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY;
+        double maxY = Double.NEGATIVE_INFINITY;
+        for (List<Point> stroke : strokes) {
+            for (Point point : stroke) {
+                minX = Math.min(minX, point.x);
+                minY = Math.min(minY, point.y);
+                maxX = Math.max(maxX, point.x);
+                maxY = Math.max(maxY, point.y);
+            }
+        }
+        if (!Double.isFinite(minX)) return 0.0;
+        double width = maxX - minX;
+        double height = maxY - minY;
+        double longer = Math.max(width, height);
+        return longer < 1e-10 ? 0.0 : Math.min(width, height) / longer;
+    }
+
     private static double distance(Point a, Point b) {
         return Math.hypot(a.x - b.x, a.y - b.y);
     }
@@ -1042,5 +1098,9 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         return length;
     }
 
-    private record TemplateScore(PointCloudTemplate template, double score, double distance) {}
+    private record TemplateScore(
+            PointCloudTemplate template,
+            double score,
+            double distance,
+            com.maxello1.whamagic.magic.RecognitionRejectionReason structuralRejection) {}
 }

@@ -10,6 +10,8 @@ import com.maxello1.whamagic.magic.SymbolKind;
 import com.maxello1.whamagic.magic.CandidateState;
 import com.maxello1.whamagic.magic.ElementType;
 import com.maxello1.whamagic.magic.RingDetector;
+import com.maxello1.whamagic.magic.SymbolRecognitionResult;
+import com.maxello1.whamagic.magic.UnknownInkClassification;
 import net.minecraft.resources.Identifier;
 
 import java.util.ArrayList;
@@ -44,10 +46,6 @@ public class SelectionEngine {
     
     public static SelectedSymbols select(List<SymbolCandidate> candidates, RingDetector.RingGlyph ring, int maxCalls) {
         int calls = 0;
-        // Noise rejection thresholds
-        double MIN_PATH_LENGTH = 0.10; // minimum path length as fraction of canvas
-        int MIN_POINT_COUNT = 4;       // minimum total points
-        double MIN_DIMENSION = 0.07;   // minimum width or height
         boolean recognitionBudgetExhausted = false;
         int unevaluatedCandidateCount = 0;
         
@@ -57,11 +55,10 @@ public class SelectionEngine {
             SymbolCandidate cand = candidates.get(candidateIndex);
             
             // Phase 2: Early noise rejection — skip recognition for obvious noise
-            if (isNoise(cand, MIN_PATH_LENGTH, MIN_POINT_COUNT, MIN_DIMENSION)) {
+            if (UnknownInkClassifier.isNoise(cand.strokes())) {
                 // Create a stub result for noise candidates
-                RasterRecognizer.RecognitionResult noiseRes = new RasterRecognizer.RecognitionResult(
-                        false, null, "Noise", null, null, 0, null, null,
-                        RecognitionRejectionReason.NOISE_DISCARDED);
+                SymbolRecognitionResult noiseRes = SymbolRecognitionResult.rejected(
+                        "Noise", RecognitionRejectionReason.NOISE_DISCARDED, 0.0);
                 evaluated.add(new EvaluatedCandidate(cand, noiseRes, 0, null, 0, 0));
                 continue;
             }
@@ -85,24 +82,23 @@ public class SelectionEngine {
                 break;
             }
             
-            RasterRecognizer.RecognitionResult sigilRes = null;
+            SymbolRecognitionResult sigilRes = null;
             double sigilScore = 0;
             double sigilRoleScore = 0;
             
             if (likelySigil) {
                 sigilRes = PointCloudRecognizer.INSTANCE.recognize(cand.strokes(), SymbolKind.SIGIL);
                 calls++;
-                sigilScore = sigilRes.score;
+                sigilScore = sigilRes.score();
                 double centralityScore = 1.0 - clamp(cand.radialPosition() / 0.70);
                 sigilRoleScore = sigilScore > 0 ? sigilScore + centralityScore * 0.20 : 0;
             } else {
-                sigilRes = new RasterRecognizer.RecognitionResult(
-                        false, null, "Unknown", null, null, 0, null, null,
-                        RecognitionRejectionReason.SCORE_BELOW_THRESHOLD);
+                sigilRes = SymbolRecognitionResult.rejected(
+                        "Unknown", RecognitionRejectionReason.SCORE_BELOW_THRESHOLD, 0.0);
             }
             
             double bestSignScore = 0;
-            RasterRecognizer.RecognitionResult bestSignRes = null;
+            SymbolRecognitionResult bestSignRes = null;
             double bestAngle = 0;
             
             // Optimization: skip sign rotation tests for clearly central candidates
@@ -113,11 +109,11 @@ public class SelectionEngine {
                     if (angleToTest < 0) angleToTest += 360;
                     
                     List<List<Point>> rotatedStrokes = rotateStrokes(cand.strokes(), cand.centroid(), angleToTest);
-                    RasterRecognizer.RecognitionResult res = PointCloudRecognizer.INSTANCE.recognize(rotatedStrokes, SymbolKind.SIGN);
+                    SymbolRecognitionResult res = PointCloudRecognizer.INSTANCE.recognize(rotatedStrokes, SymbolKind.SIGN);
                     calls++;
                     
-                    if (bestSignRes == null || res.score > bestSignScore) {
-                        bestSignScore = res.score;
+                    if (bestSignRes == null || res.score() > bestSignScore) {
+                        bestSignScore = res.score();
                         bestSignRes = res;
                         bestAngle = angleToTest;
                     }
@@ -137,8 +133,8 @@ public class SelectionEngine {
             int cmp = Double.compare(roleB, roleA);
             if (cmp != 0) return cmp;
             // Higher raw recognition confidence
-            double rawA = Math.max(a.sigilRes != null ? a.sigilRes.score : 0, a.signRes != null ? a.signRes.score : 0);
-            double rawB = Math.max(b.sigilRes != null ? b.sigilRes.score : 0, b.signRes != null ? b.signRes.score : 0);
+            double rawA = Math.max(a.sigilRes != null ? a.sigilRes.score() : 0, a.signRes != null ? a.signRes.score() : 0);
+            double rawB = Math.max(b.sigilRes != null ? b.sigilRes.score() : 0, b.signRes != null ? b.signRes.score() : 0);
             cmp = Double.compare(rawB, rawA);
             if (cmp != 0) return cmp;
             // Greater explained-stroke coverage (more strokes)
@@ -161,12 +157,12 @@ public class SelectionEngine {
         List<EvaluatedCandidate> noise = new ArrayList<>();
         
         for (EvaluatedCandidate eval : evaluated) {
-            RasterRecognizer.RecognitionResult bestRes = pickBestResult(eval);
-            if (bestRes != null && bestRes.rejectionReason == RecognitionRejectionReason.NOISE_DISCARDED) {
+            SymbolRecognitionResult bestRes = pickBestResult(eval);
+            if (bestRes != null && bestRes.rejectionReason() == RecognitionRejectionReason.NOISE_DISCARDED) {
                 noise.add(eval);
-            } else if (bestRes != null && bestRes.recognized && bestRes.confidenceGap >= 0.05) {
+            } else if (bestRes != null && bestRes.recognized() && bestRes.confidenceGap() >= 0.05) {
                 recognised.add(eval);
-            } else if (bestRes != null && bestRes.recognized) {
+            } else if (bestRes != null && bestRes.recognized()) {
                 ambiguous.add(eval);
             } else {
                 unknown.add(eval);
@@ -195,7 +191,7 @@ public class SelectionEngine {
         
         boolean preferSuper = false;
         if (superEval != null) {
-            RasterRecognizer.RecognitionResult superRes = pickBestResult(superEval);
+            SymbolRecognitionResult superRes = pickBestResult(superEval);
             double superScore = superRes != null ? Math.max(superEval.sigilRoleScore, superEval.signRoleScore) : 0;
             
             // Collect non-overlapping sub-candidates and compute weighted average
@@ -251,17 +247,17 @@ public class SelectionEngine {
             
             if (!overlap) {
                 boolean isSigil = eval.sigilRoleScore >= eval.signRoleScore;
-                RasterRecognizer.RecognitionResult primaryRes = isSigil ? eval.sigilRes : eval.signRes;
-                RasterRecognizer.RecognitionResult fallbackRes = isSigil ? eval.signRes : eval.sigilRes;
+                SymbolRecognitionResult primaryRes = isSigil ? eval.sigilRes : eval.signRes;
+                SymbolRecognitionResult fallbackRes = isSigil ? eval.signRes : eval.sigilRes;
                 
                 // Try primary interpretation first, then fallback
-                RasterRecognizer.RecognitionResult res = null;
+                SymbolRecognitionResult res = null;
                 boolean selectedAsSigil = isSigil;
-                if (primaryRes != null && primaryRes.recognized) {
+                if (primaryRes != null && primaryRes.recognized()) {
                     res = primaryRes;
-                } else if (fallbackRes != null && fallbackRes.recognized
-                        && fallbackRes.confidenceGap >= 0.05
-                        && fallbackRes.score >= 0.70) {
+                } else if (fallbackRes != null && fallbackRes.recognized()
+                        && fallbackRes.confidenceGap() >= 0.05
+                        && fallbackRes.score() >= 0.70) {
                     // Only use fallback if it has a clear confidence gap
                     // AND a solid confidence score. Without these checks,
                     // random shapes can match via the weaker interpretation.
@@ -272,9 +268,9 @@ public class SelectionEngine {
                 // Noise-discarded candidates are skipped entirely.
                 // They don't claim strokes — if diagnostics are needed later,
                 // a separate discardedStrokeIndices collection can be added.
-                RasterRecognizer.RecognitionResult bestRes = pickBestResult(eval);
+                SymbolRecognitionResult bestRes = pickBestResult(eval);
                 if (bestRes != null
-                        && bestRes.rejectionReason == RecognitionRejectionReason.NOISE_DISCARDED) {
+                        && bestRes.rejectionReason() == RecognitionRejectionReason.NOISE_DISCARDED) {
                     continue;
                 }
                 
@@ -293,12 +289,13 @@ public class SelectionEngine {
                     
                     if (selectedAsSigil) {
                         ElementType el = null;
-                        try { if (res.element != null) el = ElementType.valueOf(res.element.toUpperCase()); } catch (Exception ignored) {}
+                        try { if (res.element() != null) el = ElementType.valueOf(res.element().toUpperCase()); } catch (Exception ignored) {}
                         
                         outSigils.add(new RecognizedSigil(
-                            Identifier.tryParse(res.id),
+                            Identifier.tryParse(res.id()),
                             el,
-                            res.score,
+                            res.sigilSemantic(),
+                            res.score(),
                             eval.cand.centroid(),
                             eval.cand.bounds(),
                             0,
@@ -308,13 +305,18 @@ public class SelectionEngine {
                         ));
                     } else {
                         outSigns.add(new RecognizedSign(
-                            res.id,
-                            res.score,
+                            eval.cand.id(),
+                            res.id(),
+                            res.score(),
                             eval.cand.angularPosition(),
                             eval.bestAngle,
                             "sign",
-                            res.signSemantic,
-                            eval.cand.sourceStrokeIndices()
+                            res.signSemantic(),
+                            eval.cand.sourceStrokeIndices(),
+                            eval.cand.centroid(),
+                            eval.cand.bounds(),
+                            mergeAlternatives(eval),
+                            RecognitionRejectionReason.NONE
                         ));
                     }
                 } else {
@@ -324,6 +326,8 @@ public class SelectionEngine {
                     // Merge alternatives from both sigil and sign evaluations
                     List<RecognitionAlternative> alts = mergeAlternatives(eval);
                     RecognitionRejectionReason reason = determineRejectionReason(eval);
+                    UnknownInkClassification classification =
+                            UnknownInkClassifier.classify(eval.cand.strokes(), reason);
                     
                     outUnknowns.add(new UnknownSymbol(
                         eval.cand.id(),
@@ -331,6 +335,7 @@ public class SelectionEngine {
                         eval.cand.strokes(),
                         eval.cand.bounds(),
                         CandidateState.UNKNOWN,
+                        classification,
                         alts,
                         reason
                     ));
@@ -343,9 +348,9 @@ public class SelectionEngine {
     }
     
     /** Build alternatives list from a RecognitionResult, setting the role score. */
-    private static List<RecognitionAlternative> buildAlternatives(RasterRecognizer.RecognitionResult res, double roleScore, double rotationDeg) {
+    private static List<RecognitionAlternative> buildAlternatives(SymbolRecognitionResult res, double roleScore, double rotationDeg) {
         List<RecognitionAlternative> alts = new ArrayList<>();
-        for (RecognitionAlternative alt : res.alternatives) {
+        for (RecognitionAlternative alt : res.alternatives()) {
             alts.add(new RecognitionAlternative(
                 alt.id(), alt.displayName(), alt.kind(),
                 alt.rawScore(), roleScore, alt.templateCoverage(),
@@ -360,7 +365,7 @@ public class SelectionEngine {
     private static List<RecognitionAlternative> mergeAlternatives(EvaluatedCandidate eval) {
         List<RecognitionAlternative> alts = new ArrayList<>();
         if (eval.sigilRes != null) {
-            for (RecognitionAlternative alt : eval.sigilRes.alternatives) {
+            for (RecognitionAlternative alt : eval.sigilRes.alternatives()) {
                 alts.add(new RecognitionAlternative(
                     alt.id(), alt.displayName(), alt.kind(),
                     alt.rawScore(), eval.sigilRoleScore, alt.templateCoverage(),
@@ -370,7 +375,7 @@ public class SelectionEngine {
             }
         }
         if (eval.signRes != null) {
-            for (RecognitionAlternative alt : eval.signRes.alternatives) {
+            for (RecognitionAlternative alt : eval.signRes.alternatives()) {
                 alts.add(new RecognitionAlternative(
                     alt.id(), alt.displayName(), alt.kind(),
                     alt.rawScore(), eval.signRoleScore, alt.templateCoverage(),
@@ -390,17 +395,17 @@ public class SelectionEngine {
     /** Determine the primary rejection reason from the best result. */
     private static RecognitionRejectionReason determineRejectionReason(EvaluatedCandidate eval) {
         // Use the better result's rejection reason
-        RasterRecognizer.RecognitionResult best = eval.sigilRoleScore >= eval.signRoleScore ? eval.sigilRes : eval.signRes;
-        if (best != null && best.rejectionReason != null) {
-            return best.rejectionReason;
+        SymbolRecognitionResult best = eval.sigilRoleScore >= eval.signRoleScore ? eval.sigilRes : eval.signRes;
+        if (best != null && best.rejectionReason() != null) {
+            return best.rejectionReason();
         }
         return RecognitionRejectionReason.SCORE_BELOW_THRESHOLD;
     }
     
     /** Get the best symbol ID from an evaluated candidate, for deterministic tie-breaking. */
     private static String bestId(EvaluatedCandidate eval) {
-        String sigilId = eval.sigilRes != null && eval.sigilRes.id != null ? eval.sigilRes.id : "";
-        String signId = eval.signRes != null && eval.signRes.id != null ? eval.signRes.id : "";
+        String sigilId = eval.sigilRes != null && eval.sigilRes.id() != null ? eval.sigilRes.id() : "";
+        String signId = eval.signRes != null && eval.signRes.id() != null ? eval.signRes.id() : "";
         if (eval.sigilRoleScore >= eval.signRoleScore) {
             return sigilId.isEmpty() ? signId : sigilId;
         }
@@ -408,14 +413,14 @@ public class SelectionEngine {
     }
     
     /** Pick the best recognition result from an evaluated candidate. */
-    private static RasterRecognizer.RecognitionResult pickBestResult(EvaluatedCandidate eval) {
+    private static SymbolRecognitionResult pickBestResult(EvaluatedCandidate eval) {
         boolean isSigil = eval.sigilRoleScore >= eval.signRoleScore;
-        RasterRecognizer.RecognitionResult primary = isSigil ? eval.sigilRes : eval.signRes;
-        RasterRecognizer.RecognitionResult fallback = isSigil ? eval.signRes : eval.sigilRes;
-        if (primary != null && (primary.recognized || primary.rejectionReason == RecognitionRejectionReason.NOISE_DISCARDED)) {
+        SymbolRecognitionResult primary = isSigil ? eval.sigilRes : eval.signRes;
+        SymbolRecognitionResult fallback = isSigil ? eval.signRes : eval.sigilRes;
+        if (primary != null && (primary.recognized() || primary.rejectionReason() == RecognitionRejectionReason.NOISE_DISCARDED)) {
             return primary;
         }
-        if (fallback != null && (fallback.recognized || fallback.rejectionReason == RecognitionRejectionReason.NOISE_DISCARDED)) {
+        if (fallback != null && (fallback.recognized() || fallback.rejectionReason() == RecognitionRejectionReason.NOISE_DISCARDED)) {
             return fallback;
         }
         return primary != null ? primary : fallback;
@@ -446,13 +451,13 @@ public class SelectionEngine {
     /** Diagnostic data for a single evaluated candidate. */
     public static class EvaluatedCandidate {
         public final SymbolCandidate cand;
-        public final RasterRecognizer.RecognitionResult sigilRes;
+        public final SymbolRecognitionResult sigilRes;
         public final double sigilRoleScore;
-        public final RasterRecognizer.RecognitionResult signRes;
+        public final SymbolRecognitionResult signRes;
         public final double signRoleScore;
         public final double bestAngle;
         
-        public EvaluatedCandidate(SymbolCandidate cand, RasterRecognizer.RecognitionResult sigilRes, double sigilRoleScore, RasterRecognizer.RecognitionResult signRes, double signRoleScore, double bestAngle) {
+        public EvaluatedCandidate(SymbolCandidate cand, SymbolRecognitionResult sigilRes, double sigilRoleScore, SymbolRecognitionResult signRes, double signRoleScore, double bestAngle) {
             this.cand = cand;
             this.sigilRes = sigilRes;
             this.sigilRoleScore = sigilRoleScore;
@@ -462,41 +467,4 @@ public class SelectionEngine {
         }
     }
     
-    /** Check if a candidate is obviously noise that should skip full recognition. */
-    private static boolean isNoise(SymbolCandidate cand, double minPathLength, int minPointCount, double minDimension) {
-        // Count total points
-        int totalPoints = 0;
-        double pathLen = 0;
-        double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE;
-        double minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
-        
-        for (List<Point> stroke : cand.strokes()) {
-            totalPoints += stroke.size();
-            for (int i = 0; i < stroke.size(); i++) {
-                Point p = stroke.get(i);
-                minX = Math.min(minX, p.x);
-                maxX = Math.max(maxX, p.x);
-                minY = Math.min(minY, p.y);
-                maxY = Math.max(maxY, p.y);
-                if (i > 0) {
-                    Point prev = stroke.get(i - 1);
-                    pathLen += Math.hypot(p.x - prev.x, p.y - prev.y);
-                }
-            }
-        }
-        
-        double w = maxX - minX;
-        double h = maxY - minY;
-        
-        // Too few points
-        if (totalPoints < minPointCount) return true;
-        
-        // Negligible path length
-        if (pathLen < minPathLength) return true;
-        
-        // Near-zero dimensions (dot-like)
-        if (w < minDimension && h < minDimension) return true;
-        
-        return false;
-    }
 }

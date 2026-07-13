@@ -53,6 +53,9 @@ public class SpellCompiler {
             if (sigil.element() != null) {
                 elements.add(sigil.element());
             }
+            if (primarySemantic == null && sigil.semantic() != null) {
+                primarySemantic = sigil.semantic();
+            }
             displayNames.add(sigil.alternatives().isEmpty() ? sigil.id().getPath() : sigil.alternatives().get(0).displayName());
         }
         
@@ -90,6 +93,21 @@ public class SpellCompiler {
         
         if (invalidSigns && warning == null) {
             warning = GlyphWarning.INVALID_SIGNS;
+        }
+
+        boolean hasAmbiguousInk = ast.unknownInk().stream()
+                .anyMatch(ink -> ink.classification() == UnknownInkClassification.AMBIGUOUS);
+        boolean hasSubstantialUnknownInk = ast.unknownInk().stream()
+                .anyMatch(ink -> ink.classification() == UnknownInkClassification.SUBSTANTIAL_UNKNOWN);
+        boolean hasBudgetSkippedInk = ast.unknownInk().stream()
+                .anyMatch(ink -> ink.classification() == UnknownInkClassification.BUDGET_SKIPPED);
+        if (hasAmbiguousInk || hasSubstantialUnknownInk || hasBudgetSkippedInk) {
+            state = SpellState.INVALID;
+            warning = hasAmbiguousInk
+                    ? GlyphWarning.AMBIGUOUS_INK
+                    : hasBudgetSkippedInk
+                        ? GlyphWarning.INCOMPLETE_RECOGNITION
+                        : GlyphWarning.SUBSTANTIAL_UNKNOWN_INK;
         }
         
         String displayName = String.join(" + ", displayNames);

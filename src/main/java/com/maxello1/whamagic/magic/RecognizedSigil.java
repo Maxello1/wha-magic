@@ -7,6 +7,7 @@ import java.util.List;
 public record RecognizedSigil(
     Identifier id,
     ElementType element,
+    SigilSemantic semantic,
     double recognitionConfidence,
     Point centroid,
     BoundingBox bounds,
@@ -14,4 +15,10 @@ public record RecognizedSigil(
     List<Integer> sourceStrokeIndices,
     List<RecognitionAlternative> alternatives,
     RecognitionRejectionReason rejectionReason
-) {}
+) {
+    public RecognizedSigil {
+        sourceStrokeIndices = sourceStrokeIndices == null ? List.of() : List.copyOf(sourceStrokeIndices);
+        alternatives = alternatives == null ? List.of() : List.copyOf(alternatives);
+        rejectionReason = rejectionReason == null ? RecognitionRejectionReason.NONE : rejectionReason;
+    }
+}

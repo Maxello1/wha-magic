@@ -143,9 +143,14 @@ public class SpellDictionary {
                             "sigil".equals(kind) ? com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGIL_DEFAULTS
                                                  : com.maxello1.whamagic.magic.SymbolRecognitionRules.SIGN_DEFAULTS;
                     rules = new com.maxello1.whamagic.magic.SymbolRecognitionRules(
+                        rulesObj.has("minimumScore") ? rulesObj.get("minimumScore").getAsDouble() : defaults.minimumScore(),
+                        rulesObj.has("minimumGap") ? rulesObj.get("minimumGap").getAsDouble() : defaults.minimumGap(),
                         rulesObj.has("minimumComplexity") ? rulesObj.get("minimumComplexity").getAsDouble() : defaults.minimumComplexity(),
+                        rulesObj.has("minimumDimensionRatio") ? rulesObj.get("minimumDimensionRatio").getAsDouble() : defaults.minimumDimensionRatio(),
                         rulesObj.has("allowLineLike") ? rulesObj.get("allowLineLike").getAsBoolean() : defaults.allowLineLike(),
-                        rulesObj.has("minimumDimensionRatio") ? rulesObj.get("minimumDimensionRatio").getAsDouble() : defaults.minimumDimensionRatio()
+                        rulesObj.has("minimumClosedContours") ? rulesObj.get("minimumClosedContours").getAsInt() : defaults.minimumClosedContours(),
+                        rulesObj.has("softMinimumStrokeCount") ? rulesObj.get("softMinimumStrokeCount").getAsInt() : defaults.softMinimumStrokeCount(),
+                        rulesObj.has("softMaximumStrokeCount") ? rulesObj.get("softMaximumStrokeCount").getAsInt() : defaults.softMaximumStrokeCount()
                     );
                 }
 

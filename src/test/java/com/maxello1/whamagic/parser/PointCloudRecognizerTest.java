@@ -2,6 +2,8 @@ package com.maxello1.whamagic.parser;
 
 import com.maxello1.whamagic.magic.RecognitionRejectionReason;
 import com.maxello1.whamagic.magic.SymbolKind;
+import com.maxello1.whamagic.magic.SymbolRecognitionRules;
+import com.maxello1.whamagic.magic.SymbolRecognitionResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -12,6 +14,46 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class PointCloudRecognizerTest {
+
+    @Test
+    public void symbolRecognizerUsesRecognizerNeutralResult() throws Exception {
+        assertEquals(SymbolRecognitionResult.class,
+                SymbolRecognizer.class
+                        .getMethod("recognize", List.class, SymbolKind.class)
+                        .getReturnType());
+        assertEquals(SymbolRecognitionResult.class,
+                PointCloudRecognizer.class
+                        .getMethod("recognize", List.class, SymbolKind.class)
+                        .getReturnType());
+        assertEquals(SymbolRecognitionResult.class,
+                RasterRecognizer.class
+                        .getMethod("recognize", List.class, SymbolKind.class)
+                        .getReturnType());
+        assertTrue(java.util.Arrays.stream(RasterRecognizer.class.getDeclaredClasses())
+                .noneMatch(type -> "RecognitionResult".equals(type.getSimpleName())));
+        SymbolRecognitionResult rejected = SymbolRecognitionResult.rejected(
+                "Unknown", RecognitionRejectionReason.NO_STROKES, 0.20);
+        assertThrows(UnsupportedOperationException.class,
+                () -> rejected.alternatives().add(null));
+    }
+
+    @Test
+    public void perSymbolScoreAndGapRulesControlAcceptance() {
+        SymbolRecognitionRules strict = new SymbolRecognitionRules(
+                0.70, 0.05, 0.20, 0.05, true, 0, 1, 4);
+        SymbolRecognitionRules relaxedGap = new SymbolRecognitionRules(
+                0.70, 0.02, 0.20, 0.05, true, 0, 1, 4);
+
+        assertEquals(RecognitionRejectionReason.SCORE_BELOW_THRESHOLD,
+                PointCloudRecognizer.acceptanceReason(
+                        0.69, 0.20, RecognitionRejectionReason.NONE, strict));
+        assertEquals(RecognitionRejectionReason.AMBIGUOUS_TOP_MATCHES,
+                PointCloudRecognizer.acceptanceReason(
+                        0.75, 0.72, RecognitionRejectionReason.NONE, strict));
+        assertEquals(RecognitionRejectionReason.NONE,
+                PointCloudRecognizer.acceptanceReason(
+                        0.75, 0.72, RecognitionRejectionReason.NONE, relaxedGap));
+    }
 
     @Test
     public void sixteenMeaningfulStrokesReceiveTwoPointsEach() {
@@ -58,16 +100,16 @@ public class PointCloudRecognizerTest {
         assertThrows(IllegalArgumentException.class,
                 () -> PointCloudRecognizer.normalizeForDiagnostics(strokes));
 
-        RasterRecognizer.RecognitionResult first =
+        SymbolRecognitionResult first =
                 PointCloudRecognizer.recognizeStatic(strokes, SymbolKind.SIGIL);
-        RasterRecognizer.RecognitionResult second =
+        SymbolRecognitionResult second =
                 PointCloudRecognizer.recognizeStatic(strokes, SymbolKind.SIGIL);
-        assertFalse(first.recognized);
-        assertEquals(RecognitionRejectionReason.UNSUPPORTED_COMPLEXITY, first.rejectionReason);
-        assertEquals(first.recognized, second.recognized);
-        assertEquals(first.id, second.id);
-        assertEquals(first.score, second.score);
-        assertEquals(first.rejectionReason, second.rejectionReason,
+        assertFalse(first.recognized());
+        assertEquals(RecognitionRejectionReason.UNSUPPORTED_COMPLEXITY, first.rejectionReason());
+        assertEquals(first.recognized(), second.recognized());
+        assertEquals(first.id(), second.id());
+        assertEquals(first.score(), second.score());
+        assertEquals(first.rejectionReason(), second.rejectionReason(),
                 "Unsupported-complexity rejection must be deterministic");
     }
 

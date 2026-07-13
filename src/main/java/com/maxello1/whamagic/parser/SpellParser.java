@@ -95,10 +95,36 @@ public class SpellParser {
             selection.allEvaluated()
         );
         
-        GlyphAst ast = new GlyphAst(ring, selection.sigils(), selection.signs(), selection.unknowns());
         boolean recognitionComplete = !ringDiagnostics.budgetExhausted()
                 && !genResult.candidateLimitReached()
                 && !selection.recognitionBudgetExhausted();
+        List<ClassifiedUnknownInk> unknownInk = new ArrayList<>();
+        for (UnknownSymbol unknown : selection.unknowns()) {
+            unknownInk.add(new ClassifiedUnknownInk(
+                    unknown.classification(), unknown.candidateId(), unknown.sourceStrokeIndices(),
+                    unknown.bounds(), unknown.rejectionReason()));
+        }
+        if (!recognitionComplete) {
+            unknownInk.add(new ClassifiedUnknownInk(
+                    UnknownInkClassification.BUDGET_SKIPPED,
+                    -1,
+                    List.copyOf(droppedSourceStrokeIndices),
+                    null,
+                    RecognitionRejectionReason.BUDGET_EXHAUSTED));
+        } else {
+            for (int sourceIndex : droppedSourceStrokeIndices) {
+                List<List<Point>> droppedStroke = List.of(strokes.get(sourceIndex));
+                unknownInk.add(new ClassifiedUnknownInk(
+                        UnknownInkClassifier.classify(droppedStroke, RecognitionRejectionReason.NONE),
+                        -1,
+                        List.of(sourceIndex),
+                        UnknownInkClassifier.bounds(droppedStroke),
+                        RecognitionRejectionReason.NONE));
+            }
+        }
+
+        GlyphAst ast = new GlyphAst(
+                ring, selection.sigils(), selection.signs(), selection.unknowns(), unknownInk);
         SpellIr ir = SpellCompiler.compile(ast, recognitionComplete);
 
         return new ParseResult(ast, ir, debugResult);

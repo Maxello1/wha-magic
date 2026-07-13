@@ -14,6 +14,12 @@ public record SpellIr(
     String displayName,
     String statusMessage
 ) {
+    public SpellIr {
+        elements = elements == null ? List.of() : List.copyOf(elements);
+        signCounts = signCounts == null ? Map.of() : Map.copyOf(signCounts);
+        signSemantics = signSemantics == null ? List.of() : List.copyOf(signSemantics);
+    }
+
     public boolean valid() {
         return state == SpellState.PREPARED || state == SpellState.ACTIVE;
     }

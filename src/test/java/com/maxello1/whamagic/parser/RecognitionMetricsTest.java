@@ -7,6 +7,7 @@ import com.google.gson.JsonObject;
 import com.maxello1.whamagic.magic.CandidateGenerationSettings;
 import com.maxello1.whamagic.magic.RecognitionAlternative;
 import com.maxello1.whamagic.magic.RecognitionRejectionReason;
+import com.maxello1.whamagic.magic.SymbolRecognitionResult;
 import com.maxello1.whamagic.parser.SelectionEngine.EvaluatedCandidate;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -669,17 +670,17 @@ public class RecognitionMetricsTest {
         List<String> top3Ids = new ArrayList<>();
         if (result.debugResult != null && result.debugResult.allEvaluated() != null) {
             for (var eval : result.debugResult.allEvaluated()) {
-                if (eval.sigilRes != null && eval.sigilRes.alternatives != null) {
-                    for (int i = 0; i < Math.min(3, eval.sigilRes.alternatives.size()); i++) {
-                        var alt = eval.sigilRes.alternatives.get(i);
+                if (eval.sigilRes != null) {
+                    for (int i = 0; i < Math.min(3, eval.sigilRes.alternatives().size()); i++) {
+                        var alt = eval.sigilRes.alternatives().get(i);
                         if (alt.id() != null) {
                             top3Ids.add(alt.id().getPath());
                         }
                     }
                 }
-                if (eval.signRes != null && eval.signRes.alternatives != null) {
-                    for (int i = 0; i < Math.min(3, eval.signRes.alternatives.size()); i++) {
-                        var alt = eval.signRes.alternatives.get(i);
+                if (eval.signRes != null) {
+                    for (int i = 0; i < Math.min(3, eval.signRes.alternatives().size()); i++) {
+                        var alt = eval.signRes.alternatives().get(i);
                         if (alt.id() != null) {
                             top3Ids.add(alt.id().getPath());
                         }
@@ -850,10 +851,10 @@ public class RecognitionMetricsTest {
                 result.debugResult.droppedSourceStrokeIndices());
     }
 
-    private String recognitionSummary(RasterRecognizer.RecognitionResult result) {
+    private String recognitionSummary(SymbolRecognitionResult result) {
         if (result == null) return "none";
-        return String.format("%s/%.3f/%s/%s", result.id, result.score,
-                result.recognized, result.rejectionReason);
+        return String.format("%s/%.3f/%s/%s", result.id(), result.score(),
+                result.recognized(), result.rejectionReason());
     }
 
     /**
@@ -877,13 +878,13 @@ public class RecognitionMetricsTest {
         // Collect all alternatives from all candidates for global best/second-best
         List<AlternativeWithContext> allAlts = new ArrayList<>();
         for (EvaluatedCandidate eval : allEval) {
-            if (eval.sigilRes != null && eval.sigilRes.alternatives != null) {
-                for (RecognitionAlternative alt : eval.sigilRes.alternatives) {
+            if (eval.sigilRes != null) {
+                for (RecognitionAlternative alt : eval.sigilRes.alternatives()) {
                     allAlts.add(new AlternativeWithContext(alt, "SIGIL", eval, eval.sigilRes));
                 }
             }
-            if (eval.signRes != null && eval.signRes.alternatives != null) {
-                for (RecognitionAlternative alt : eval.signRes.alternatives) {
+            if (eval.signRes != null) {
+                for (RecognitionAlternative alt : eval.signRes.alternatives()) {
                     allAlts.add(new AlternativeWithContext(alt, "SIGN", eval, eval.signRes));
                 }
             }
@@ -894,7 +895,7 @@ public class RecognitionMetricsTest {
 
         RecognitionAlternative bestAlt = null;
         RecognitionAlternative secondBestAlt = null;
-        RasterRecognizer.RecognitionResult bestRes = null;
+        SymbolRecognitionResult bestRes = null;
         EvaluatedCandidate bestEvalCand = null;
         String bestKind = "UNKNOWN";
 
@@ -917,8 +918,8 @@ public class RecognitionMetricsTest {
         double gap = rawConf - secondConf;
 
         RecognitionRejectionReason reason = RecognitionRejectionReason.NONE;
-        if (bestRes != null && bestRes.rejectionReason != null) {
-            reason = bestRes.rejectionReason;
+        if (bestRes != null && bestRes.rejectionReason() != null) {
+            reason = bestRes.rejectionReason();
         }
 
         // Track rejection reason
@@ -972,6 +973,6 @@ public class RecognitionMetricsTest {
         RecognitionAlternative alt,
         String kind,
         EvaluatedCandidate eval,
-        RasterRecognizer.RecognitionResult res
+        SymbolRecognitionResult res
     ) {}
 }

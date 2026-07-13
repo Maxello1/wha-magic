@@ -5,9 +5,14 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.maxello1.whamagic.magic.CandidateGenerationSettings;
+import com.maxello1.whamagic.magic.ClassifiedUnknownInk;
+import com.maxello1.whamagic.magic.GlyphAst;
 import com.maxello1.whamagic.magic.GlyphWarning;
 import com.maxello1.whamagic.magic.RingDetector;
 import com.maxello1.whamagic.magic.SpellState;
+import com.maxello1.whamagic.magic.SpellCompiler;
+import com.maxello1.whamagic.magic.SymbolKind;
+import com.maxello1.whamagic.magic.UnknownInkClassification;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -85,12 +90,68 @@ public class SpellParserTest {
         assertFalse(result.ast.signs().isEmpty(), "Fixture must recognize its signs");
         Set<Integer> ringIndices = new HashSet<>(result.debugResult.ringStrokeIndices());
         result.ast.signs().forEach(sign -> {
+            assertTrue(sign.candidateId() >= 0);
             assertFalse(sign.sourceStrokeIndices().isEmpty(), "Recognized signs must retain source ownership");
+            assertNotNull(sign.centroid());
+            assertNotNull(sign.bounds());
+            assertFalse(sign.alternatives().isEmpty());
+            assertEquals(com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE,
+                    sign.rejectionReason());
             assertTrue(sign.sourceStrokeIndices().stream().noneMatch(ringIndices::contains),
                     "Recognized signs must not own the ring stroke");
             assertTrue(sign.sourceStrokeIndices().stream().allMatch(index -> index >= 0 && index < strokes.size()),
                     "Recognized signs must use original input indices");
+            assertThrows(UnsupportedOperationException.class,
+                    () -> sign.sourceStrokeIndices().add(999),
+                    "Recognized sign ownership must be immutable");
+            assertThrows(UnsupportedOperationException.class,
+                    () -> sign.alternatives().clear(),
+                    "Recognized sign alternatives must be immutable");
         });
+    }
+
+    @Test
+    public void sigilSemanticPropagatesIntoActiveIr() throws Exception {
+        List<List<Point>> strokes = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/multi/spell_light_complete.json"));
+
+        SpellParser.ParseResult result = SpellParser.parse(strokes);
+        var light = result.ast.sigils().stream()
+                .filter(sigil -> sigil.id() != null && "light".equals(sigil.id().getPath()))
+                .findFirst().orElseThrow();
+        var directRecognition = PointCloudRecognizer.INSTANCE.recognize(
+                strokes.subList(1, strokes.size()), SymbolKind.SIGIL);
+
+        assertNotNull(light.semantic(), "Dictionary sigil semantics must survive recognition");
+        assertTrue(directRecognition.recognized());
+        assertEquals(light.semantic(), directRecognition.sigilSemantic());
+        assertEquals(light.semantic(), result.ir.sigilSemantic());
+        assertEquals(SpellState.ACTIVE, result.ir.state());
+    }
+
+    @Test
+    public void mergedAndSplitOpenColumnRemainRecognizable() throws Exception {
+        List<List<Point>> canonical = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/positive/sign_column.json"));
+
+        List<Point> mergedStroke = new ArrayList<>(canonical.get(0));
+        List<Point> base = canonical.get(1);
+        for (int i = base.size() / 2 - 1; i >= 0; i--) mergedStroke.add(base.get(i));
+        for (int i = 1; i < base.size(); i++) mergedStroke.add(base.get(i));
+        var merged = PointCloudRecognizer.INSTANCE.recognize(List.of(mergedStroke), SymbolKind.SIGN);
+
+        List<Point> vertical = canonical.get(0);
+        int splitAt = vertical.size() / 2;
+        List<List<Point>> split = List.of(
+                List.copyOf(vertical.subList(0, splitAt + 1)),
+                List.copyOf(vertical.subList(splitAt, vertical.size())),
+                base);
+        var splitResult = PointCloudRecognizer.INSTANCE.recognize(split, SymbolKind.SIGN);
+
+        assertTrue(merged.recognized(), () -> "Merged Column rejected: " + merged);
+        assertEquals("column", merged.id());
+        assertTrue(splitResult.recognized(), () -> "Split Column rejected: " + splitResult);
+        assertEquals("column", splitResult.id());
     }
 
     @Test
@@ -107,6 +168,8 @@ public class SpellParserTest {
         SpellParser.ParseResult result = SpellParser.parse(strokes, limited);
 
         assertTrue(result.debugResult.candidateLimitReached());
+        assertTrue(result.ast.unknownInk().stream()
+                .anyMatch(ink -> ink.classification() == UnknownInkClassification.BUDGET_SKIPPED));
         assertEquals(SpellState.INVALID, result.ir.state());
         assertEquals(GlyphWarning.INCOMPLETE_RECOGNITION, result.ir.warning());
         assertFalse(result.ir.valid(), "An incomplete candidate search must fail closed in the IR");
@@ -198,6 +261,69 @@ public class SpellParserTest {
         assertFalse(result.debugResult.ringBudgetExhausted());
         assertFalse(result.debugResult.candidateLimitReached());
         assertFalse(result.debugResult.recognitionBudgetExhausted());
+        assertTrue(result.ast.unknownInk().stream()
+                .anyMatch(ink -> ink.sourceStrokeIndices().contains(13)
+                        && ink.classification() == UnknownInkClassification.NOISE));
+        assertTrue(result.ir.valid(), "Micro-noise must not invalidate an otherwise valid spell");
+    }
+
+    @Test
+    public void substantialUnknownInkInvalidatesCompleteSpell() throws Exception {
+        List<List<Point>> strokes = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/multi/spell_light_complete.json"));
+        strokes.add(List.of(
+                new Point(0.12, 0.32), new Point(0.22, 0.42),
+                new Point(0.12, 0.52), new Point(0.22, 0.62),
+                new Point(0.12, 0.72)));
+
+        SpellParser.ParseResult result = SpellParser.parse(strokes);
+
+        assertTrue(result.ast.unknownInk().stream()
+                .anyMatch(ink -> ink.classification() == UnknownInkClassification.SUBSTANTIAL_UNKNOWN),
+                () -> "Unknown ink classifications: " + result.ast.unknownInk());
+        assertEquals(SpellState.INVALID, result.ir.state());
+        assertFalse(result.ir.valid());
+    }
+
+    @Test
+    public void ambiguousInkInvalidatesCompleteSpell() throws Exception {
+        List<List<Point>> strokes = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/multi/spell_light_complete.json"));
+        SpellParser.ParseResult baseline = SpellParser.parse(strokes);
+        ClassifiedUnknownInk ambiguous = new ClassifiedUnknownInk(
+                UnknownInkClassification.AMBIGUOUS,
+                -1,
+                List.of(strokes.size()),
+                new BoundingBox(0.10, 0.10, 0.40, 0.40),
+                com.maxello1.whamagic.magic.RecognitionRejectionReason.AMBIGUOUS_TOP_MATCHES);
+        GlyphAst ast = new GlyphAst(
+                baseline.ast.ring(), baseline.ast.sigils(), baseline.ast.signs(),
+                baseline.ast.unknownSymbols(), List.of(ambiguous));
+
+        var ir = SpellCompiler.compile(ast);
+
+        assertEquals(SpellState.INVALID, ir.state());
+        assertEquals(GlyphWarning.AMBIGUOUS_INK, ir.warning());
+    }
+
+    @Test
+    public void harmlessUnexplainedMarkDoesNotInvalidateCompleteSpell() throws Exception {
+        List<List<Point>> strokes = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/multi/spell_light_complete.json"));
+        SpellParser.ParseResult baseline = SpellParser.parse(strokes);
+        ClassifiedUnknownInk harmless = new ClassifiedUnknownInk(
+                UnknownInkClassification.HARMLESS_UNEXPLAINED,
+                -1,
+                List.of(strokes.size()),
+                new BoundingBox(0.74, 0.76, 0.86, 0.76),
+                com.maxello1.whamagic.magic.RecognitionRejectionReason.NONE);
+        GlyphAst ast = new GlyphAst(
+                baseline.ast.ring(), baseline.ast.sigils(), baseline.ast.signs(),
+                baseline.ast.unknownSymbols(), List.of(harmless));
+
+        var ir = SpellCompiler.compile(ast);
+
+        assertTrue(ir.valid(), () -> "Harmless unexplained ink invalidated spell: " + ir);
     }
 
     private static Stream<File> fixtureFiles() {
@@ -275,13 +401,11 @@ public class SpellParserTest {
             if (result.debugResult.allEvaluated() != null && !result.debugResult.allEvaluated().isEmpty()) {
                 boolean anyHasAlternatives = false;
                 for (var eval : result.debugResult.allEvaluated()) {
-                    if (eval.sigilRes != null && eval.sigilRes.alternatives != null
-                            && !eval.sigilRes.alternatives.isEmpty()) {
+                    if (eval.sigilRes != null && !eval.sigilRes.alternatives().isEmpty()) {
                         anyHasAlternatives = true;
                         break;
                     }
-                    if (eval.signRes != null && eval.signRes.alternatives != null
-                            && !eval.signRes.alternatives.isEmpty()) {
+                    if (eval.signRes != null && !eval.signRes.alternatives().isEmpty()) {
                         anyHasAlternatives = true;
                         break;
                     }
