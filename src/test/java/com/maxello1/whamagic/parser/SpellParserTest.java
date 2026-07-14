@@ -63,7 +63,11 @@ public class SpellParserTest {
     public void testDictionaryLoaded() {
         int templateCount = com.maxello1.whamagic.parser.RasterRecognizer.getTemplateCount();
         assertTrue(templateCount > 0, "Dictionary should have loaded templates");
-        assertEquals(8, templateCount, "Expected 5 sigils + 3 signs = 8 templates");
+        assertEquals(11, templateCount, "Expected 8 canonical and 3 player-trained visual templates");
+        assertEquals(8, SpellDictionary.snapshot().templates().stream()
+                .map(SpellDictionary.TemplateIdentity::semanticId)
+                .distinct()
+                .count(), "Visual variants must still represent 5 sigils and 3 signs");
     }
 
     @Test

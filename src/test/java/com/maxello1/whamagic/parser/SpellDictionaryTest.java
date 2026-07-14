@@ -12,6 +12,7 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -164,6 +165,27 @@ public class SpellDictionaryTest {
         assertEquals(firstResult.id(), secondResult.id());
         assertEquals(firstResult.matchedTemplateId(), secondResult.matchedTemplateId());
         assertEquals(firstResult.alternatives(), secondResult.alternatives());
+    }
+
+    @Test
+    void defaultDictionaryContainsOnlyTheApprovedPlayerTrainingVariants() {
+        SpellDictionary.reload();
+        SpellDictionary.DictionarySnapshot snapshot = SpellDictionary.snapshot();
+
+        Set<String> playerVariants = snapshot.templates().stream()
+                .map(SpellDictionary.TemplateIdentity::templateId)
+                .filter(templateId -> templateId.contains("-player-"))
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+
+        assertEquals(Set.of(
+                "column-player-20260714-a",
+                "earth-player-20260714-a",
+                "convergence-player-20260714-a"), playerVariants);
+        assertEquals("2", snapshot.version());
+        assertEquals(8, snapshot.templates().stream()
+                .map(SpellDictionary.TemplateIdentity::semanticId)
+                .distinct()
+                .count());
     }
 
     private static SpellDictionary.ResourceSource source(Map<String, String> resources) {

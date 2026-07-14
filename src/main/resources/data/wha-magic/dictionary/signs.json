@@ -7,6 +7,7 @@
       "outer"
     ],
     "sourceNotes": "Column causes the magic of its glyph to manifest in a column or beam above the glyph. If the signs are not balanced, the spell manifests from the side with the most column signs toward the opposite side of the ring. A column sign on the left pushes the effect to the right. The shorter line on the sign typically faces outwards, and while it is sometimes shown inverted, it is unclear how this changes the effect.",
+    "recognitionRuleNotes": "Column is a simple open T, so it requires two-dimensional non-line-like geometry, prefers 2-3 strokes, and uses a 0.40 minimum score to prevent partial matches against isolated lines and scribbles.",
     "semantic": {
       "manifestation": "column",
       "directionMode": "inward",
@@ -14,6 +15,14 @@
       "focus": 0.35,
       "spread": -0.24,
       "range": 0.18
+    },
+    "recognitionRules": {
+      "minimumScore": 0.4,
+      "minimumComplexity": 0.2,
+      "allowLineLike": false,
+      "minimumDimensionRatio": 0.12,
+      "softMinimumStrokeCount": 2,
+      "softMaximumStrokeCount": 3
     },
     "strokeTemplate": {
       "sourceAspectRatio": 1,
@@ -81,6 +90,62 @@
       "sourceAspectRatio": 1,
       "strokes": [
         [{"x": 0.020,"y": 0.050}, {"x": 0.053,"y": 0.050}, {"x": 0.087,"y": 0.050}, {"x": 0.120,"y": 0.050}, {"x": 0.153,"y": 0.050}, {"x": 0.187,"y": 0.050}, {"x": 0.220,"y": 0.050}, {"x": 0.253,"y": 0.050}, {"x": 0.287,"y": 0.050}, {"x": 0.320,"y": 0.050}, {"x": 0.353,"y": 0.050}, {"x": 0.387,"y": 0.050}, {"x": 0.420,"y": 0.050}, {"x": 0.453,"y": 0.050}, {"x": 0.487,"y": 0.050}, {"x": 0.520,"y": 0.050}, {"x": 0.553,"y": 0.050}, {"x": 0.587,"y": 0.050}, {"x": 0.620,"y": 0.050}, {"x": 0.653,"y": 0.050}, {"x": 0.687,"y": 0.050}, {"x": 0.720,"y": 0.050}, {"x": 0.753,"y": 0.050}, {"x": 0.787,"y": 0.050}, {"x": 0.820,"y": 0.050}, {"x": 0.853,"y": 0.050}, {"x": 0.887,"y": 0.050}, {"x": 0.920,"y": 0.050}, {"x": 0.953,"y": 0.050}, {"x": 0.980,"y": 0.050}, {"x": 0.964,"y": 0.110}, {"x": 0.948,"y": 0.170}, {"x": 0.932,"y": 0.230}, {"x": 0.916,"y": 0.290}, {"x": 0.900,"y": 0.350}, {"x": 0.884,"y": 0.410}, {"x": 0.868,"y": 0.470}, {"x": 0.852,"y": 0.530}, {"x": 0.836,"y": 0.590}, {"x": 0.820,"y": 0.650}, {"x": 0.804,"y": 0.710}, {"x": 0.788,"y": 0.770}, {"x": 0.772,"y": 0.830}, {"x": 0.756,"y": 0.890}, {"x": 0.740,"y": 0.920}, {"x": 0.700,"y": 0.930}, {"x": 0.660,"y": 0.940}, {"x": 0.620,"y": 0.945}, {"x": 0.580,"y": 0.948}, {"x": 0.540,"y": 0.950}, {"x": 0.500,"y": 0.950}, {"x": 0.460,"y": 0.948}, {"x": 0.420,"y": 0.945}, {"x": 0.380,"y": 0.940}, {"x": 0.340,"y": 0.930}, {"x": 0.300,"y": 0.920}, {"x": 0.260,"y": 0.890}, {"x": 0.244,"y": 0.830}, {"x": 0.228,"y": 0.770}, {"x": 0.212,"y": 0.710}, {"x": 0.196,"y": 0.650}, {"x": 0.180,"y": 0.590}, {"x": 0.164,"y": 0.530}, {"x": 0.148,"y": 0.470}, {"x": 0.132,"y": 0.410}, {"x": 0.116,"y": 0.350}, {"x": 0.100,"y": 0.290}, {"x": 0.084,"y": 0.230}, {"x": 0.068,"y": 0.170}, {"x": 0.052,"y": 0.110}, {"x": 0.020,"y": 0.050}]
+      ]
+    }
+  },
+  {
+    "id": "column",
+    "templateId": "column-player-20260714-a",
+    "displayName": "Column",
+    "sourceNotes": "Compactly resampled visual variant from an explicitly classified training candidate.",
+    "recognitionRuleNotes": "Uses the same stricter Column rules as the canonical template to prevent partial matches against isolated lines and scribbles.",
+    "semantic": {
+      "manifestation": "column",
+      "directionMode": "inward",
+      "force": 0.3,
+      "focus": 0.35,
+      "spread": -0.24,
+      "range": 0.18
+    },
+    "recognitionRules": {
+      "minimumScore": 0.4,
+      "minimumComplexity": 0.2,
+      "allowLineLike": false,
+      "minimumDimensionRatio": 0.12,
+      "softMinimumStrokeCount": 2,
+      "softMaximumStrokeCount": 3
+    },
+    "strokeTemplate": {
+      "sourceAspectRatio": 1,
+      "strokes": [
+        [{"x":0.411125,"y":0.783562},{"x":0.414156,"y":0.783562},{"x":0.421219,"y":0.783562},{"x":0.429281,"y":0.784562},{"x":0.434344,"y":0.785562},{"x":0.446469,"y":0.786594},{"x":0.453531,"y":0.786594},{"x":0.461625,"y":0.787594},{"x":0.476781,"y":0.788594},{"x":0.485844,"y":0.789625},{"x":0.503031,"y":0.790625},{"x":0.533344,"y":0.791625},{"x":0.543438,"y":0.791625},{"x":0.562625,"y":0.791625},{"x":0.572719,"y":0.791625},{"x":0.590906,"y":0.791625},{"x":0.6,"y":0.791625},{"x":0.617156,"y":0.791625},{"x":0.637375,"y":0.791625},{"x":0.647469,"y":0.790625},{"x":0.6515,"y":0.790625},{"x":0.655562,"y":0.790625}],
+        [{"x":0.5515,"y":0.789625},{"x":0.5515,"y":0.786594},{"x":0.5515,"y":0.782531},{"x":0.5515,"y":0.771406},{"x":0.5515,"y":0.764344},{"x":0.5515,"y":0.760312},{"x":0.5515,"y":0.751188},{"x":0.5515,"y":0.746156},{"x":0.5515,"y":0.736031},{"x":0.5515,"y":0.732},{"x":0.5515,"y":0.722906},{"x":0.5515,"y":0.718844},{"x":0.5515,"y":0.711781}]
+      ]
+    }
+  },
+  {
+    "id": "convergence",
+    "templateId": "convergence-player-20260714-a",
+    "displayName": "Convergence",
+    "sourceNotes": "Compactly resampled visual variant from an explicitly classified training candidate.",
+    "semantic": {
+      "manifestation": "convergence",
+      "directionMode": "inward",
+      "force": 0.08,
+      "focus": 0.36,
+      "spread": -0.32,
+      "range": -0.04,
+      "lifetimeBias": 0.08
+    },
+    "recognitionRules": {
+      "minimumComplexity": 0.2,
+      "allowLineLike": false,
+      "minimumDimensionRatio": 0.15
+    },
+    "strokeTemplate": {
+      "sourceAspectRatio": 1,
+      "strokes": [
+        [{"x":0.412125,"y":0.374156},{"x":0.438375,"y":0.381219},{"x":0.470719,"y":0.381219},{"x":0.504031,"y":0.381219},{"x":0.535344,"y":0.38325},{"x":0.566656,"y":0.38325},{"x":0.589906,"y":0.384281},{"x":0.62625,"y":0.386281},{"x":0.652531,"y":0.391344},{"x":0.640406,"y":0.416625},{"x":0.621219,"y":0.438844},{"x":0.601,"y":0.465125},{"x":0.582844,"y":0.490406},{"x":0.562625,"y":0.515687},{"x":0.542438,"y":0.534875},{"x":0.52425,"y":0.554094},{"x":0.507062,"y":0.566219},{"x":0.490906,"y":0.542969},{"x":0.47375,"y":0.515687},{"x":0.454531,"y":0.486375},{"x":0.441406,"y":0.456031},{"x":0.430312,"y":0.42975},{"x":0.418188,"y":0.403469},{"x":0.407062,"y":0.380219}]
       ]
     }
   }

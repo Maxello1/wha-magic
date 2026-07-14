@@ -29,7 +29,7 @@ import java.util.Set;
 
 /** Atomically loads, validates, and publishes the active recognition dictionary. */
 public final class SpellDictionary {
-    public static final String DICTIONARY_VERSION = "1";
+    public static final String DICTIONARY_VERSION = "2";
     public static final String SIGILS_RESOURCE = "/data/wha-magic/dictionary/sigils.json";
     public static final String SIGNS_RESOURCE = "/data/wha-magic/dictionary/signs.json";
 

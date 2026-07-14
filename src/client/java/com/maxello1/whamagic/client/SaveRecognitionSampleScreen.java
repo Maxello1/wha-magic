@@ -93,7 +93,7 @@ final class SaveRecognitionSampleScreen extends Screen {
                         (button, role) -> validateForm()));
 
         expectedValidCheckbox = addRenderableWidget(Checkbox.builder(
-                        Component.literal("Expected valid"), font)
+                        Component.literal("Complete spell should be valid"), font)
                 .pos(formX, formY + 98)
                 .selected(capture.actualResult() != null && capture.actualResult().isValidSpell())
                 .onValueChange((checkbox, selected) -> validateForm())
