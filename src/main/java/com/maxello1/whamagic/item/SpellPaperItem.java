@@ -4,6 +4,7 @@ import com.maxello1.whamagic.WitchHatMod;
 import com.maxello1.whamagic.magic.SpellExecutionService;
 import com.maxello1.whamagic.magic.SpellState;
 import com.maxello1.whamagic.magic.StoredSpell;
+import com.maxello1.whamagic.magic.StoredSpellResolver;
 import com.maxello1.whamagic.parser.Point;
 import com.maxello1.whamagic.parser.SpellParser;
 import net.minecraft.network.chat.Component;
@@ -31,14 +32,23 @@ public class SpellPaperItem extends Item {
         ItemStack stack = player.getItemInHand(hand);
         List<List<Point>> strokes = stack.get(WitchHatMod.STROKES_COMPONENT);
         
-        if (strokes != null && !strokes.isEmpty()) {
-            SpellParser.ParseResult result = SpellParser.parse(strokes);
-            if (result.ir.valid() && result.ir.state() == SpellState.ACTIVE) {
-                if (!level.isClientSide()) {
-                    SpellExecutionService.execute(level, player, result.ir);
-                    if (!player.getAbilities().instabuild) {
-                        stack.shrink(1);
-                    }
+        if (!level.isClientSide() && strokes != null && !strokes.isEmpty()) {
+            StoredSpellResolver.Resolution resolution = StoredSpellResolver.resolve(
+                    stack.get(WitchHatMod.STORED_SPELL_COMPONENT),
+                    strokes,
+                    SpellParser::parse);
+            if (resolution.reparsed()) {
+                if (resolution.refreshedSpell() != null) {
+                    stack.set(WitchHatMod.STORED_SPELL_COMPONENT, resolution.refreshedSpell());
+                } else {
+                    stack.remove(WitchHatMod.STORED_SPELL_COMPONENT);
+                }
+            }
+
+            if (resolution.valid() && resolution.ir().state() == SpellState.ACTIVE) {
+                SpellExecutionService.execute(level, player, resolution.ir());
+                if (!player.getAbilities().instabuild) {
+                    stack.shrink(1);
                 }
                 return InteractionResult.SUCCESS;
             }
