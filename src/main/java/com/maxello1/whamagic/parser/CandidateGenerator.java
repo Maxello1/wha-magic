@@ -13,6 +13,7 @@ import java.util.HashSet;
 public class CandidateGenerator {
 
     private static final double DIRECT_STROKE_PROXIMITY = 0.06;
+    private static final int MAX_BITMASK_PRIMITIVE_GROUPS = 16;
 
     /** Result of candidate generation, including diagnostic data. */
     public record GenerationResult(
@@ -23,6 +24,73 @@ public class CandidateGenerator {
     ) {}
 
     public static GenerationResult generateCandidates(List<IndexedStroke> strokes, RingDetector.RingGlyph ring, CandidateGenerationSettings settings) {
+        List<PrimitiveStrokeGroup> primitives = groupPrimitives(strokes, ring, settings);
+
+        boolean limitReached = false;
+        List<Integer> droppedSourceStrokeIndices = new ArrayList<>();
+        if (primitives.size() > settings.maxPrimitiveGroups()) {
+            primitives.sort((a, b) -> Double.compare(b.pathLength(), a.pathLength()));
+            for (PrimitiveStrokeGroup dropped : primitives.subList(settings.maxPrimitiveGroups(), primitives.size())) {
+                droppedSourceStrokeIndices.addAll(dropped.sourceStrokeIndices());
+            }
+            primitives = new ArrayList<>(primitives.subList(0, settings.maxPrimitiveGroups()));
+            limitReached = true;
+        }
+
+        Collections.sort(droppedSourceStrokeIndices);
+        List<SymbolCandidate> candidates = new ArrayList<>();
+        int n = primitives.size();
+        if (n > MAX_BITMASK_PRIMITIVE_GROUPS) {
+            throw new IllegalArgumentException("Candidate generation supports at most "
+                    + MAX_BITMASK_PRIMITIVE_GROUPS + " primitive groups");
+        }
+
+        // Insert the all-strokes super-candidate first so it cannot be displaced by
+        // the bounded sub-candidate search.
+        if (n > 1) {
+            SymbolCandidate allStrokesCandidate = buildCandidate(new ArrayList<>(primitives), ring, 0)
+                    .withSuperCandidate();
+            if (isValidSuperCandidate(allStrokesCandidate, ring)) {
+                if (candidates.size() < settings.maxCandidates()) {
+                    candidates.add(allStrokesCandidate);
+                } else {
+                    limitReached = true;
+                }
+            }
+        }
+
+        int[] adjacencyMasks = buildGroupAdjacencyMasks(primitives, ring, settings);
+        CandidateSearchState search = new CandidateSearchState(candidates, limitReached);
+        int maxK = Math.min(n, settings.maxGroupsPerCandidate());
+        int allGroupsMask = n == 0 ? 0 : (1 << n) - 1;
+        for (int k = 1; k <= maxK; k++) {
+            if (!streamConnectedCandidates(
+                    primitives,
+                    adjacencyMasks,
+                    ring,
+                    settings,
+                    k,
+                    0,
+                    0,
+                    0,
+                    allGroupsMask,
+                    search)) {
+                break;
+            }
+        }
+
+        return new GenerationResult(primitives, candidates, search.limitReached,
+                List.copyOf(droppedSourceStrokeIndices));
+    }
+
+    /**
+     * Allocation-heavy compatibility oracle retained only for focused equivalence
+     * tests. Production candidate generation uses the streaming bitmask path above.
+     */
+    static GenerationResult generateCandidatesReference(
+            List<IndexedStroke> strokes,
+            RingDetector.RingGlyph ring,
+            CandidateGenerationSettings settings) {
         List<PrimitiveStrokeGroup> primitives = groupPrimitives(strokes, ring, settings);
 
         boolean limitReached = false;
@@ -82,6 +150,71 @@ public class CandidateGenerator {
         return new GenerationResult(primitives, candidates, limitReached,
                 List.copyOf(droppedSourceStrokeIndices));
     }
+
+    private static boolean streamConnectedCandidates(
+            List<PrimitiveStrokeGroup> primitives,
+            int[] adjacencyMasks,
+            RingDetector.RingGlyph ring,
+            CandidateGenerationSettings settings,
+            int targetSize,
+            int start,
+            int selectedMask,
+            int selectedCount,
+            int allGroupsMask,
+            CandidateSearchState search) {
+        if (selectedCount == targetSize) {
+            // The separately validated super-candidate owns the all-groups slot.
+            if (primitives.size() > 1 && selectedMask == allGroupsMask) {
+                return true;
+            }
+
+            SymbolCandidate candidate = buildCandidate(
+                    primitives, selectedMask, ring, search.candidates.size());
+            if (!isValidCandidate(candidate, ring, settings)) {
+                return true;
+            }
+            // Equality with the cap is not exhaustion. The result is incomplete
+            // only once this valid candidate would have to be omitted.
+            if (search.candidates.size() >= settings.maxCandidates()) {
+                search.limitReached = true;
+                return false;
+            }
+            search.candidates.add(candidate);
+            return true;
+        }
+
+        int remaining = targetSize - selectedCount;
+        int lastStart = primitives.size() - remaining;
+        for (int i = start; i <= lastStart; i++) {
+            if (selectedMask != 0 && (adjacencyMasks[i] & selectedMask) == 0) {
+                continue;
+            }
+            if (!streamConnectedCandidates(
+                    primitives,
+                    adjacencyMasks,
+                    ring,
+                    settings,
+                    targetSize,
+                    i + 1,
+                    selectedMask | (1 << i),
+                    selectedCount + 1,
+                    allGroupsMask,
+                    search)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static final class CandidateSearchState {
+        private final List<SymbolCandidate> candidates;
+        private boolean limitReached;
+
+        private CandidateSearchState(List<SymbolCandidate> candidates, boolean limitReached) {
+            this.candidates = candidates;
+            this.limitReached = limitReached;
+        }
+    }
     
     /**
      * Generate combinations of groups where at least one group in the combination
@@ -122,6 +255,50 @@ public class CandidateGenerator {
      * Build adjacency matrix between primitive groups based on spatial proximity.
      * Two groups are adjacent if their centroids, bounds, or endpoints are close enough.
      */
+    private static int[] buildGroupAdjacencyMasks(
+            List<PrimitiveStrokeGroup> groups,
+            RingDetector.RingGlyph ring,
+            CandidateGenerationSettings settings) {
+        int n = groups.size();
+        int[] masks = new int[n];
+
+        double refSize = ring != null ? ring.radius() * 2 : 1.0;
+        double maxGap = refSize * settings.maxInternalGapRatio();
+        double maxGapSq = maxGap * maxGap;
+
+        for (int i = 0; i < n; i++) {
+            masks[i] |= 1 << i;
+            for (int j = i + 1; j < n; j++) {
+                PrimitiveStrokeGroup a = groups.get(i);
+                PrimitiveStrokeGroup b = groups.get(j);
+
+                boolean boundsClose = boundsOverlapOrClose(a.bounds(), b.bounds(), maxGap);
+                double centroidDistSq = distSq(a.centroid(), b.centroid());
+                boolean centroidClose = centroidDistSq < maxGapSq * 4;
+                boolean endpointClose = checkEndpointProximity(a.strokes(), b.strokes(), maxGapSq);
+
+                boolean angularClose = true;
+                if (ring != null) {
+                    double angleDiff = Math.abs(a.angularPosition() - b.angularPosition());
+                    if (angleDiff > 180) angleDiff = 360 - angleDiff;
+                    angularClose = angleDiff < settings.maxAngularSpanDeg() * 0.6;
+                }
+
+                int proximity = 0;
+                if (boundsClose) proximity++;
+                if (centroidClose) proximity++;
+                if (endpointClose) proximity++;
+                if (angularClose) proximity++;
+                if (proximity >= 2) {
+                    masks[i] |= 1 << j;
+                    masks[j] |= 1 << i;
+                }
+            }
+        }
+
+        return masks;
+    }
+
     private static boolean[][] buildGroupAdjacency(List<PrimitiveStrokeGroup> groups, RingDetector.RingGlyph ring, CandidateGenerationSettings settings) {
         int n = groups.size();
         boolean[][] adj = new boolean[n][n];
@@ -457,6 +634,80 @@ public class CandidateGenerator {
         
         BoundingBox bounds = new BoundingBox(minX, minY, maxX, maxY);
         return new SymbolCandidate(candId, primitiveIds, sourceIndices, allStrokes, bounds, new Point(cx, cy), radiusNorm, angleAroundRing, angularSpan);
+    }
+
+    private static SymbolCandidate buildCandidate(
+            List<PrimitiveStrokeGroup> groups,
+            int selectedMask,
+            RingDetector.RingGlyph ring,
+            int candidateId) {
+        List<List<Point>> allStrokes = new ArrayList<>();
+        List<Integer> primitiveIds = new ArrayList<>(Integer.bitCount(selectedMask));
+        List<Integer> sourceIndices = new ArrayList<>();
+
+        double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        double cx = 0, cy = 0;
+        int totalPoints = 0;
+
+        for (int i = 0; i < groups.size(); i++) {
+            if ((selectedMask & (1 << i)) == 0) continue;
+            PrimitiveStrokeGroup group = groups.get(i);
+            primitiveIds.add(group.id());
+            for (List<Point> stroke : group.strokes()) {
+                allStrokes.add(stroke);
+                for (Point point : stroke) {
+                    if (point.x < minX) minX = point.x;
+                    if (point.y < minY) minY = point.y;
+                    if (point.x > maxX) maxX = point.x;
+                    if (point.y > maxY) maxY = point.y;
+                    cx += point.x;
+                    cy += point.y;
+                    totalPoints++;
+                }
+            }
+            sourceIndices.addAll(group.sourceStrokeIndices());
+        }
+
+        cx /= totalPoints;
+        cy /= totalPoints;
+
+        double angleAroundRing = 0;
+        double radiusNorm = 0;
+        if (ring != null) {
+            double angle = Math.toDegrees(Math.atan2(cy - ring.center().y, cx - ring.center().x));
+            angleAroundRing = angle < 0 ? angle + 360 : angle;
+            double radius = Math.hypot(cx - ring.center().x, cy - ring.center().y);
+            radiusNorm = radius / ring.radius();
+        }
+
+        double angularSpan = 0;
+        if (ring != null && Integer.bitCount(selectedMask) > 1) {
+            double minAngle = Double.MAX_VALUE;
+            double maxAngle = -Double.MAX_VALUE;
+            for (int i = 0; i < groups.size(); i++) {
+                if ((selectedMask & (1 << i)) == 0) continue;
+                double angle = groups.get(i).angularPosition();
+                double difference = angle - angleAroundRing;
+                while (difference > 180) difference -= 360;
+                while (difference < -180) difference += 360;
+                if (difference < minAngle) minAngle = difference;
+                if (difference > maxAngle) maxAngle = difference;
+            }
+            angularSpan = maxAngle - minAngle;
+        }
+
+        BoundingBox bounds = new BoundingBox(minX, minY, maxX, maxY);
+        return new SymbolCandidate(
+                candidateId,
+                primitiveIds,
+                sourceIndices,
+                allStrokes,
+                bounds,
+                new Point(cx, cy),
+                radiusNorm,
+                angleAroundRing,
+                angularSpan);
     }
     
     private static boolean isValidCandidate(SymbolCandidate cand, RingDetector.RingGlyph ring, CandidateGenerationSettings settings) {
