@@ -116,6 +116,99 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         }
     }
 
+    /** Candidate geometry prepared once and reused for every role and rotation probe. */
+    static final class PreparedCandidate {
+        private final RecognitionRejectionReason preparationFailure;
+        private final int strokeCount;
+        private final double[] normalizedX;
+        private final double[] normalizedY;
+        private final int[] sampleStrokeIds;
+        private final double[] sampleTurningAngles;
+        private final double[] rawX;
+        private final double[] rawY;
+        private final int[] strokeOffsets;
+        private final double originX;
+        private final double originY;
+
+        private PreparedCandidate(
+                RecognitionRejectionReason preparationFailure,
+                int strokeCount,
+                double[] normalizedX,
+                double[] normalizedY,
+                int[] sampleStrokeIds,
+                double[] sampleTurningAngles,
+                double[] rawX,
+                double[] rawY,
+                int[] strokeOffsets,
+                double originX,
+                double originY) {
+            this.preparationFailure = preparationFailure;
+            this.strokeCount = strokeCount;
+            this.normalizedX = normalizedX;
+            this.normalizedY = normalizedY;
+            this.sampleStrokeIds = sampleStrokeIds;
+            this.sampleTurningAngles = sampleTurningAngles;
+            this.rawX = rawX;
+            this.rawY = rawY;
+            this.strokeOffsets = strokeOffsets;
+            this.originX = originX;
+            this.originY = originY;
+        }
+
+        RotationWorkspace newWorkspace() {
+            return new RotationWorkspace(rawX.length, strokeCount);
+        }
+    }
+
+    /** Reusable primitive storage for all rotations of one prepared candidate. */
+    static final class RotationWorkspace {
+        private final double[] normalizedX = new double[N];
+        private final double[] normalizedY = new double[N];
+        private final double[] turningAngles = new double[N];
+        private final double[] rotatedRawX;
+        private final double[] rotatedRawY;
+        private final boolean[] matched = new boolean[N];
+        private final double[] nodeX;
+        private final double[] nodeY;
+        private final int[] edgeStart;
+        private final int[] edgeEnd;
+        private final int[] edgeStroke;
+        private final int[] parent;
+        private final int[] edgeCounts;
+        private final int[] nodeCounts;
+        private final boolean[] usedNodes;
+        private final double[] componentMinX;
+        private final double[] componentMinY;
+        private final double[] componentMaxX;
+        private final double[] componentMaxY;
+
+        private double drawingDiagonal;
+        private double dimensionRatio;
+        private double complexity;
+        private int closedContourCount;
+        private boolean closedSingleStroke;
+        private double centralSymmetryError;
+
+        private RotationWorkspace(int rawPointCount, int strokeCount) {
+            rotatedRawX = new double[rawPointCount];
+            rotatedRawY = new double[rawPointCount];
+            int endpointCapacity = Math.max(1, strokeCount * 2);
+            nodeX = new double[endpointCapacity];
+            nodeY = new double[endpointCapacity];
+            edgeStart = new int[Math.max(1, strokeCount)];
+            edgeEnd = new int[Math.max(1, strokeCount)];
+            edgeStroke = new int[Math.max(1, strokeCount)];
+            parent = new int[endpointCapacity];
+            edgeCounts = new int[endpointCapacity];
+            nodeCounts = new int[endpointCapacity];
+            usedNodes = new boolean[endpointCapacity];
+            componentMinX = new double[endpointCapacity];
+            componentMinY = new double[endpointCapacity];
+            componentMaxX = new double[endpointCapacity];
+            componentMaxY = new double[endpointCapacity];
+        }
+    }
+
     /** A normalized point-cloud template. */
     static final class PointCloudTemplate {
         private final String semanticId;
@@ -188,6 +281,85 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                 definition.sigilSemantic(), definition.signSemantic(), definition.recognitionRules());
     }
 
+    static PreparedCandidate prepareCandidate(List<List<Point>> strokes) {
+        if (strokes == null || strokes.isEmpty()) {
+            return failedPreparation(RecognitionRejectionReason.NO_STROKES, 0);
+        }
+        NormalizationAllocation allocation = normalizationAllocation(strokes);
+        if (!allocation.supported()) {
+            return failedPreparation(
+                    RecognitionRejectionReason.UNSUPPORTED_COMPLEXITY, strokes.size());
+        }
+
+        CloudPoint[] candidateCloud = strokesToCloud(strokes);
+        if (candidateCloud.length < 3) {
+            return failedPreparation(RecognitionRejectionReason.NO_STROKES, strokes.size());
+        }
+        CloudPoint[] normalized = normalize(candidateCloud, N);
+        double[] normalizedX = new double[N];
+        double[] normalizedY = new double[N];
+        int[] sampleStrokeIds = new int[N];
+        double[] sampleTurningAngles = new double[N];
+        for (int i = 0; i < N; i++) {
+            normalizedX[i] = normalized[i].x();
+            normalizedY[i] = normalized[i].y();
+            sampleStrokeIds[i] = normalized[i].strokeId();
+            sampleTurningAngles[i] = normalized[i].turningAngle();
+        }
+
+        int rawPointCount = 0;
+        for (List<Point> stroke : strokes) {
+            if (stroke != null) rawPointCount += stroke.size();
+        }
+        double[] rawX = new double[rawPointCount];
+        double[] rawY = new double[rawPointCount];
+        int[] strokeOffsets = new int[strokes.size() + 1];
+        int rawIndex = 0;
+        double originX = 0.0;
+        double originY = 0.0;
+        for (int strokeIndex = 0; strokeIndex < strokes.size(); strokeIndex++) {
+            strokeOffsets[strokeIndex] = rawIndex;
+            List<Point> stroke = strokes.get(strokeIndex);
+            if (stroke == null) continue;
+            for (Point point : stroke) {
+                rawX[rawIndex] = point.x;
+                rawY[rawIndex] = point.y;
+                originX += point.x;
+                originY += point.y;
+                rawIndex++;
+            }
+        }
+        strokeOffsets[strokes.size()] = rawIndex;
+        return new PreparedCandidate(
+                null,
+                strokes.size(),
+                normalizedX,
+                normalizedY,
+                sampleStrokeIds,
+                sampleTurningAngles,
+                rawX,
+                rawY,
+                strokeOffsets,
+                originX / rawPointCount,
+                originY / rawPointCount);
+    }
+
+    private static PreparedCandidate failedPreparation(
+            RecognitionRejectionReason reason, int strokeCount) {
+        return new PreparedCandidate(
+                reason,
+                strokeCount,
+                new double[0],
+                new double[0],
+                new int[0],
+                new double[0],
+                new double[0],
+                new double[0],
+                new int[Math.max(1, strokeCount + 1)],
+                0.0,
+                0.0);
+    }
+
     // ---- Recognition ----
 
     /**
@@ -204,6 +376,16 @@ public class PointCloudRecognizer implements SymbolRecognizer {
     }
 
     static SymbolRecognitionResult recognizeStatic(
+            List<List<Point>> strokes,
+            SymbolKind expectedKind,
+            ParseDetail detail) {
+        PreparedCandidate prepared = prepareCandidate(strokes);
+        return recognizePrepared(
+                prepared, 0.0, expectedKind, detail, prepared.newWorkspace());
+    }
+
+    /** Legacy allocation-heavy path retained package-private for equivalence tests only. */
+    static SymbolRecognitionResult recognizeReference(
             List<List<Point>> strokes,
             SymbolKind expectedKind,
             ParseDetail detail) {
@@ -341,6 +523,135 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                 best.score, 1.0 - best.score, best.score);
     }
 
+    static SymbolRecognitionResult recognizePrepared(
+            PreparedCandidate candidate,
+            double rotationDeg,
+            SymbolKind expectedKind,
+            ParseDetail detail,
+            RotationWorkspace workspace) {
+        if (candidate.preparationFailure != null) {
+            return SymbolRecognitionResult.rejected(
+                    "Unknown",
+                    candidate.preparationFailure,
+                    defaultRules(expectedKind).minimumScore());
+        }
+        prepareRotation(candidate, rotationDeg, workspace);
+
+        List<TemplateScore> scored = new ArrayList<>();
+        for (PointCloudTemplate template : SpellDictionary.pointCloudTemplates()) {
+            if (template.kind != expectedKind) continue;
+            double distance = greedyCloudMatch(workspace, template.points, N);
+            double score = Math.max((2.0 - distance) / 2.0, 0.0);
+            if (workspace.closedSingleStroke && template.closedSingleStroke
+                    && template.centralSymmetryError >= ASYMMETRIC_TEMPLATE_MIN
+                    && workspace.centralSymmetryError
+                            < template.centralSymmetryError * MIN_ASYMMETRY_RATIO) {
+                score = 0.0;
+            }
+
+            SymbolRecognitionRules rules = template.recognitionRules;
+            int requiredClosedContours = rules.minimumClosedContours() >= 0
+                    ? rules.minimumClosedContours()
+                    : template.requiredClosedContourCount;
+            RecognitionRejectionReason structuralRejection = RecognitionRejectionReason.NONE;
+            if (workspace.closedContourCount < requiredClosedContours
+                    || workspace.complexity < rules.minimumComplexity()
+                    || (!rules.allowLineLike()
+                            && workspace.dimensionRatio < rules.minimumDimensionRatio())) {
+                score = 0.0;
+                structuralRejection = RecognitionRejectionReason.INSUFFICIENT_GEOMETRY;
+            } else {
+                int softMinimum = rules.softMinimumStrokeCount();
+                int softMaximum = rules.softMaximumStrokeCount() == 0
+                        ? template.strokeCount
+                        : rules.softMaximumStrokeCount();
+                if (softMinimum > 0 && candidate.strokeCount < softMinimum) {
+                    score *= Math.sqrt((double) candidate.strokeCount / softMinimum);
+                }
+                if (softMaximum > 0 && candidate.strokeCount > softMaximum) {
+                    score *= Math.sqrt((double) softMaximum / candidate.strokeCount);
+                }
+            }
+            scored.add(new TemplateScore(template, score, structuralRejection));
+        }
+
+        if (scored.isEmpty()) {
+            return SymbolRecognitionResult.rejected(
+                    "Unknown",
+                    RecognitionRejectionReason.NO_TEMPLATES,
+                    defaultRules(expectedKind).minimumScore());
+        }
+        scored.sort((a, b) -> {
+            int scoreOrder = Double.compare(b.score, a.score);
+            if (scoreOrder != 0) return scoreOrder;
+            int semanticOrder = a.template.semanticId.compareTo(b.template.semanticId);
+            if (semanticOrder != 0) return semanticOrder;
+            return a.template.templateId.compareTo(b.template.templateId);
+        });
+
+        Map<String, TemplateScore> bestVariantBySemanticId = new LinkedHashMap<>();
+        for (TemplateScore score : scored) {
+            bestVariantBySemanticId.putIfAbsent(score.template.semanticId, score);
+        }
+        List<TemplateScore> semanticScores = List.copyOf(bestVariantBySemanticId.values());
+        TemplateScore best = semanticScores.get(0);
+        double secondScore = semanticScores.size() > 1 ? semanticScores.get(1).score : 0.0;
+        double gap = best.score - secondScore;
+
+        List<RecognitionAlternative> alternatives = new ArrayList<>();
+        int alternativeCount = detail.retainsAlternatives()
+                ? Math.min(5, semanticScores.size())
+                : 0;
+        for (int i = 0; i < alternativeCount; i++) {
+            TemplateScore score = semanticScores.get(i);
+            alternatives.add(new RecognitionAlternative(
+                    Identifier.tryParse(score.template.semanticId),
+                    score.template.displayName,
+                    score.template.kind,
+                    score.score,
+                    0,
+                    score.score,
+                    score.score,
+                    1.0 - score.score,
+                    score.score,
+                    0));
+        }
+
+        SymbolRecognitionRules bestRules = best.template.recognitionRules;
+        RecognitionRejectionReason reason = acceptanceReason(
+                best.score, secondScore, best.structuralRejection, bestRules);
+        boolean recognized = reason == RecognitionRejectionReason.NONE;
+        String displayName = recognized
+                ? best.template.displayName
+                : best.template.displayName + " ("
+                        + String.format("%.0f%%", best.score * 100) + ")";
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("$P recognize prepared: {} -> {} (score={}, gap={}, rotation={})",
+                    expectedKind,
+                    best.template.semanticId,
+                    String.format("%.3f", best.score),
+                    String.format("%.3f", gap),
+                    rotationDeg);
+        }
+        return new SymbolRecognitionResult(
+                recognized,
+                best.template.semanticId,
+                best.template.templateId,
+                displayName,
+                best.template.kind,
+                best.template.element,
+                best.score,
+                best.template.sigilSemantic,
+                best.template.signSemantic,
+                alternatives,
+                gap,
+                bestRules.minimumScore(),
+                reason,
+                best.score,
+                1.0 - best.score,
+                best.score);
+    }
+
     static RecognitionRejectionReason acceptanceReason(
             double bestScore,
             double secondScore,
@@ -432,6 +743,369 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         return Math.max(0, Math.min(100, baseQuality - deviationPenalty));
     }
 
+    private static void prepareRotation(
+            PreparedCandidate candidate,
+            double rotationDeg,
+            RotationWorkspace workspace) {
+        double radians = Math.toRadians(rotationDeg);
+        double cosine = Math.cos(radians);
+        double sine = Math.sin(radians);
+
+        if (rotationDeg == 0.0) {
+            System.arraycopy(candidate.normalizedX, 0, workspace.normalizedX, 0, N);
+            System.arraycopy(candidate.normalizedY, 0, workspace.normalizedY, 0, N);
+            System.arraycopy(
+                    candidate.sampleTurningAngles, 0, workspace.turningAngles, 0, N);
+        } else {
+            double minX = Double.MAX_VALUE;
+            double minY = Double.MAX_VALUE;
+            double maxX = -Double.MAX_VALUE;
+            double maxY = -Double.MAX_VALUE;
+            for (int i = 0; i < N; i++) {
+                double x = candidate.normalizedX[i];
+                double y = candidate.normalizedY[i];
+                double rotatedX = x * cosine - y * sine;
+                double rotatedY = x * sine + y * cosine;
+                workspace.normalizedX[i] = rotatedX;
+                workspace.normalizedY[i] = rotatedY;
+                minX = Math.min(minX, rotatedX);
+                minY = Math.min(minY, rotatedY);
+                maxX = Math.max(maxX, rotatedX);
+                maxY = Math.max(maxY, rotatedY);
+            }
+            double size = Math.max(maxX - minX, maxY - minY);
+            if (size < 1e-10) size = 1.0;
+            double centroidX = 0.0;
+            double centroidY = 0.0;
+            for (int i = 0; i < N; i++) {
+                workspace.normalizedX[i] = (workspace.normalizedX[i] - minX) / size;
+                workspace.normalizedY[i] = (workspace.normalizedY[i] - minY) / size;
+                centroidX += workspace.normalizedX[i];
+                centroidY += workspace.normalizedY[i];
+            }
+            centroidX /= N;
+            centroidY /= N;
+            for (int i = 0; i < N; i++) {
+                workspace.normalizedX[i] -= centroidX;
+                workspace.normalizedY[i] -= centroidY;
+            }
+            computeTurningAngles(candidate.sampleStrokeIds, workspace);
+        }
+
+        double rawMinX = Double.MAX_VALUE;
+        double rawMinY = Double.MAX_VALUE;
+        double rawMaxX = -Double.MAX_VALUE;
+        double rawMaxY = -Double.MAX_VALUE;
+        for (int i = 0; i < candidate.rawX.length; i++) {
+            double rotatedX;
+            double rotatedY;
+            if (rotationDeg == 0.0) {
+                rotatedX = candidate.rawX[i];
+                rotatedY = candidate.rawY[i];
+            } else {
+                double relativeX = candidate.rawX[i] - candidate.originX;
+                double relativeY = candidate.rawY[i] - candidate.originY;
+                rotatedX = relativeX * cosine - relativeY * sine + candidate.originX;
+                rotatedY = relativeX * sine + relativeY * cosine + candidate.originY;
+            }
+            workspace.rotatedRawX[i] = rotatedX;
+            workspace.rotatedRawY[i] = rotatedY;
+            rawMinX = Math.min(rawMinX, rotatedX);
+            rawMinY = Math.min(rawMinY, rotatedY);
+            rawMaxX = Math.max(rawMaxX, rotatedX);
+            rawMaxY = Math.max(rawMaxY, rotatedY);
+        }
+        double width = rawMaxX - rawMinX;
+        double height = rawMaxY - rawMinY;
+        workspace.drawingDiagonal = Math.hypot(width, height);
+        double longerDimension = Math.max(width, height);
+        workspace.dimensionRatio = longerDimension < 1e-10
+                ? 0.0
+                : Math.min(width, height) / longerDimension;
+
+        double pathLength = 0.0;
+        for (int stroke = 0; stroke < candidate.strokeCount; stroke++) {
+            int start = candidate.strokeOffsets[stroke];
+            int end = candidate.strokeOffsets[stroke + 1];
+            for (int point = start + 1; point < end; point++) {
+                pathLength += rawDistance(workspace, point - 1, point);
+            }
+        }
+        workspace.complexity = workspace.drawingDiagonal < 1e-10
+                ? 0.0
+                : pathLength / workspace.drawingDiagonal;
+        workspace.closedContourCount = countClosedContours(candidate, workspace);
+        workspace.closedSingleStroke = isClosedSingleStroke(candidate, workspace);
+        workspace.centralSymmetryError = workspace.closedSingleStroke
+                ? centralSymmetryError(workspace)
+                : 0.0;
+    }
+
+    private static void computeTurningAngles(
+            int[] strokeIds, RotationWorkspace workspace) {
+        for (int i = 0; i < N; i++) {
+            double angle = 0.0;
+            if (i > 0 && i < N - 1
+                    && strokeIds[i - 1] == strokeIds[i]
+                    && strokeIds[i] == strokeIds[i + 1]) {
+                double ax = workspace.normalizedX[i] - workspace.normalizedX[i - 1];
+                double ay = workspace.normalizedY[i] - workspace.normalizedY[i - 1];
+                double bx = workspace.normalizedX[i + 1] - workspace.normalizedX[i];
+                double by = workspace.normalizedY[i + 1] - workspace.normalizedY[i];
+                double lengthA = Math.sqrt(ax * ax + ay * ay);
+                double lengthB = Math.sqrt(bx * bx + by * by);
+                if (lengthA > 1e-10 && lengthB > 1e-10) {
+                    double dot = (ax * bx + ay * by) / (lengthA * lengthB);
+                    dot = Math.max(-1.0, Math.min(1.0, dot));
+                    angle = Math.acos(dot);
+                }
+            }
+            workspace.turningAngles[i] = angle;
+        }
+    }
+
+    private static int countClosedContours(
+            PreparedCandidate candidate, RotationWorkspace workspace) {
+        if (candidate.strokeCount == 0 || workspace.drawingDiagonal < 1e-10) return 0;
+        double tolerance = workspace.drawingDiagonal * CONTOUR_CONNECTION_RATIO;
+        int withinStrokeContours = 0;
+        int globallyClosedStrokes = 0;
+        for (int stroke = 0; stroke < candidate.strokeCount; stroke++) {
+            int start = candidate.strokeOffsets[stroke];
+            int endExclusive = candidate.strokeOffsets[stroke + 1];
+            if (endExclusive - start < 2) continue;
+            withinStrokeContours += countClosedSubpaths(
+                    workspace, start, endExclusive, tolerance, workspace.drawingDiagonal);
+            int end = endExclusive - 1;
+            if (rawDistance(workspace, start, end) <= tolerance
+                    && isMeaningfulContour(
+                            workspace, start, end, workspace.drawingDiagonal)) {
+                globallyClosedStrokes++;
+            }
+        }
+        int endpointGraphContours = countEndpointGraphContours(
+                candidate, workspace, tolerance, workspace.drawingDiagonal);
+        return Math.max(
+                0,
+                endpointGraphContours + withinStrokeContours - globallyClosedStrokes);
+    }
+
+    private static int countClosedSubpaths(
+            RotationWorkspace workspace,
+            int strokeStart,
+            int strokeEndExclusive,
+            double tolerance,
+            double drawingDiagonal) {
+        int contours = 0;
+        int lastClosureEnd = strokeStart - 4;
+        for (int end = strokeStart + 3; end < strokeEndExclusive; end++) {
+            if (end - lastClosureEnd <= 3) continue;
+            for (int start = end - 3; start >= strokeStart; start--) {
+                if (rawDistance(workspace, start, end) <= tolerance
+                        && isMeaningfulContour(workspace, start, end, drawingDiagonal)) {
+                    contours++;
+                    lastClosureEnd = end;
+                    break;
+                }
+            }
+        }
+        return contours;
+    }
+
+    private static boolean isMeaningfulContour(
+            RotationWorkspace workspace, int start, int end, double drawingDiagonal) {
+        if (end - start < 3) return false;
+        double minX = Double.MAX_VALUE;
+        double minY = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE;
+        double maxY = -Double.MAX_VALUE;
+        double twiceSignedArea = 0.0;
+        for (int i = start; i <= end; i++) {
+            double x = workspace.rotatedRawX[i];
+            double y = workspace.rotatedRawY[i];
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+            if (i < end) {
+                twiceSignedArea += x * workspace.rotatedRawY[i + 1]
+                        - workspace.rotatedRawX[i + 1] * y;
+            }
+        }
+        twiceSignedArea += workspace.rotatedRawX[end] * workspace.rotatedRawY[start]
+                - workspace.rotatedRawX[start] * workspace.rotatedRawY[end];
+        double area = Math.abs(twiceSignedArea) * 0.5;
+        double minimumArea = drawingDiagonal * drawingDiagonal * MIN_CONTOUR_AREA_RATIO;
+        return maxX - minX >= drawingDiagonal * CONTOUR_CONNECTION_RATIO
+                && maxY - minY >= drawingDiagonal * CONTOUR_CONNECTION_RATIO
+                && area >= minimumArea;
+    }
+
+    private static int countEndpointGraphContours(
+            PreparedCandidate candidate,
+            RotationWorkspace workspace,
+            double tolerance,
+            double drawingDiagonal) {
+        int nodeCount = 0;
+        int edgeCount = 0;
+        for (int stroke = 0; stroke < candidate.strokeCount; stroke++) {
+            int start = candidate.strokeOffsets[stroke];
+            int endExclusive = candidate.strokeOffsets[stroke + 1];
+            if (endExclusive - start < 2) continue;
+            int end = endExclusive - 1;
+            int startNode = findOrCreateEndpointNode(workspace, nodeCount, start, tolerance);
+            if (startNode == nodeCount) nodeCount++;
+            int endNode = findOrCreateEndpointNode(workspace, nodeCount, end, tolerance);
+            if (endNode == nodeCount) nodeCount++;
+            if (startNode == endNode
+                    && !isMeaningfulContour(workspace, start, end, drawingDiagonal)) {
+                continue;
+            }
+            workspace.edgeStart[edgeCount] = startNode;
+            workspace.edgeEnd[edgeCount] = endNode;
+            workspace.edgeStroke[edgeCount] = stroke;
+            edgeCount++;
+        }
+        if (edgeCount == 0) return 0;
+
+        for (int node = 0; node < nodeCount; node++) workspace.parent[node] = node;
+        for (int edge = 0; edge < edgeCount; edge++) {
+            union(
+                    workspace.parent,
+                    workspace.edgeStart[edge],
+                    workspace.edgeEnd[edge]);
+        }
+        Arrays.fill(workspace.edgeCounts, 0);
+        Arrays.fill(workspace.nodeCounts, 0);
+        Arrays.fill(workspace.usedNodes, false);
+        Arrays.fill(workspace.componentMinX, Double.MAX_VALUE);
+        Arrays.fill(workspace.componentMinY, Double.MAX_VALUE);
+        Arrays.fill(workspace.componentMaxX, -Double.MAX_VALUE);
+        Arrays.fill(workspace.componentMaxY, -Double.MAX_VALUE);
+
+        for (int edge = 0; edge < edgeCount; edge++) {
+            int root = find(workspace.parent, workspace.edgeStart[edge]);
+            workspace.edgeCounts[root]++;
+            workspace.usedNodes[workspace.edgeStart[edge]] = true;
+            workspace.usedNodes[workspace.edgeEnd[edge]] = true;
+            int stroke = workspace.edgeStroke[edge];
+            int start = candidate.strokeOffsets[stroke];
+            int end = candidate.strokeOffsets[stroke + 1];
+            for (int point = start; point < end; point++) {
+                workspace.componentMinX[root] = Math.min(
+                        workspace.componentMinX[root], workspace.rotatedRawX[point]);
+                workspace.componentMinY[root] = Math.min(
+                        workspace.componentMinY[root], workspace.rotatedRawY[point]);
+                workspace.componentMaxX[root] = Math.max(
+                        workspace.componentMaxX[root], workspace.rotatedRawX[point]);
+                workspace.componentMaxY[root] = Math.max(
+                        workspace.componentMaxY[root], workspace.rotatedRawY[point]);
+            }
+        }
+        for (int node = 0; node < nodeCount; node++) {
+            if (workspace.usedNodes[node]) {
+                workspace.nodeCounts[find(workspace.parent, node)]++;
+            }
+        }
+
+        int contours = 0;
+        double minimumArea = drawingDiagonal * drawingDiagonal * MIN_CONTOUR_AREA_RATIO;
+        for (int root = 0; root < nodeCount; root++) {
+            if (workspace.edgeCounts[root] == 0) continue;
+            int cycleRank = workspace.edgeCounts[root] - workspace.nodeCounts[root] + 1;
+            double boundingArea = (workspace.componentMaxX[root] - workspace.componentMinX[root])
+                    * (workspace.componentMaxY[root] - workspace.componentMinY[root]);
+            if (cycleRank > 0 && boundingArea >= minimumArea) contours += cycleRank;
+        }
+        return contours;
+    }
+
+    private static int findOrCreateEndpointNode(
+            RotationWorkspace workspace,
+            int nodeCount,
+            int pointIndex,
+            double tolerance) {
+        double x = workspace.rotatedRawX[pointIndex];
+        double y = workspace.rotatedRawY[pointIndex];
+        for (int node = 0; node < nodeCount; node++) {
+            if (Math.hypot(workspace.nodeX[node] - x, workspace.nodeY[node] - y)
+                    <= tolerance) {
+                return node;
+            }
+        }
+        workspace.nodeX[nodeCount] = x;
+        workspace.nodeY[nodeCount] = y;
+        return nodeCount;
+    }
+
+    private static int find(int[] parent, int value) {
+        if (parent[value] != value) parent[value] = find(parent, parent[value]);
+        return parent[value];
+    }
+
+    private static void union(int[] parent, int a, int b) {
+        int rootA = find(parent, a);
+        int rootB = find(parent, b);
+        if (rootA != rootB) parent[rootB] = rootA;
+    }
+
+    private static boolean isClosedSingleStroke(
+            PreparedCandidate candidate, RotationWorkspace workspace) {
+        if (candidate.strokeCount != 1
+                || candidate.strokeOffsets[1] - candidate.strokeOffsets[0] < 4) {
+            return false;
+        }
+        int start = candidate.strokeOffsets[0];
+        int end = candidate.strokeOffsets[1] - 1;
+        return workspace.drawingDiagonal > 1e-10
+                && rawDistance(workspace, start, end)
+                        <= workspace.drawingDiagonal * CONTOUR_CONNECTION_RATIO;
+    }
+
+    private static double centralSymmetryError(RotationWorkspace workspace) {
+        double centroidX = 0.0;
+        double centroidY = 0.0;
+        double minX = Double.MAX_VALUE;
+        double minY = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE;
+        double maxY = -Double.MAX_VALUE;
+        for (int i = 0; i < N; i++) {
+            centroidX += workspace.normalizedX[i];
+            centroidY += workspace.normalizedY[i];
+            minX = Math.min(minX, workspace.normalizedX[i]);
+            minY = Math.min(minY, workspace.normalizedY[i]);
+            maxX = Math.max(maxX, workspace.normalizedX[i]);
+            maxY = Math.max(maxY, workspace.normalizedY[i]);
+        }
+        centroidX /= N;
+        centroidY /= N;
+        double diagonal = Math.hypot(maxX - minX, maxY - minY);
+        if (diagonal < 1e-10) return 0.0;
+
+        double error = 0.0;
+        for (int i = 0; i < N; i++) {
+            double reflectedX = 2.0 * centroidX - workspace.normalizedX[i];
+            double reflectedY = 2.0 * centroidY - workspace.normalizedY[i];
+            double nearest = Double.MAX_VALUE;
+            for (int other = 0; other < N; other++) {
+                nearest = Math.min(
+                        nearest,
+                        Math.hypot(
+                                workspace.normalizedX[other] - reflectedX,
+                                workspace.normalizedY[other] - reflectedY));
+            }
+            error += nearest;
+        }
+        return error / N / diagonal;
+    }
+
+    private static double rawDistance(
+            RotationWorkspace workspace, int first, int second) {
+        return Math.hypot(
+                workspace.rotatedRawX[first] - workspace.rotatedRawX[second],
+                workspace.rotatedRawY[first] - workspace.rotatedRawY[second]);
+    }
+
     // ---- Core $P Algorithm ----
 
     /**
@@ -448,6 +1122,62 @@ public class PointCloudRecognizer implements SymbolRecognizer {
             minDist = Math.min(minDist, Math.min(d1, d2));
         }
         return minDist;
+    }
+
+    private static double greedyCloudMatch(
+            RotationWorkspace candidate, CloudPoint[] template, int n) {
+        int step = (int) Math.floor(Math.pow(n, 1.0 - EPSILON));
+        if (step < 1) step = 1;
+        double minDistance = Double.MAX_VALUE;
+        for (int start = 0; start < n; start += step) {
+            double candidateToTemplate = cloudDistance(
+                    candidate, template, n, start, false);
+            double templateToCandidate = cloudDistance(
+                    candidate, template, n, start, true);
+            minDistance = Math.min(
+                    minDistance, Math.min(candidateToTemplate, templateToCandidate));
+        }
+        return minDistance;
+    }
+
+    private static double cloudDistance(
+            RotationWorkspace candidate,
+            CloudPoint[] template,
+            int n,
+            int start,
+            boolean templateFirst) {
+        Arrays.fill(candidate.matched, false);
+        double sum = 0.0;
+        int sourceIndex = start;
+        do {
+            double minimumDistance = Double.MAX_VALUE;
+            int matchedIndex = -1;
+            for (int targetIndex = 0; targetIndex < n; targetIndex++) {
+                if (candidate.matched[targetIndex]) continue;
+                double distance = templateFirst
+                        ? preparedDistance(candidate, targetIndex, template[sourceIndex])
+                        : preparedDistance(candidate, sourceIndex, template[targetIndex]);
+                if (distance < minimumDistance) {
+                    minimumDistance = distance;
+                    matchedIndex = targetIndex;
+                }
+            }
+            if (matchedIndex >= 0) candidate.matched[matchedIndex] = true;
+            double weight = 1.0 - ((sourceIndex - start + n) % n) / (double) n;
+            sum += weight * minimumDistance;
+            sourceIndex = (sourceIndex + 1) % n;
+        } while (sourceIndex != start);
+        return sum;
+    }
+
+    private static double preparedDistance(
+            RotationWorkspace candidate, int candidateIndex, CloudPoint templatePoint) {
+        double dx = candidate.normalizedX[candidateIndex] - templatePoint.x();
+        double dy = candidate.normalizedY[candidateIndex] - templatePoint.y();
+        double spatialDistance = Math.sqrt(dx * dx + dy * dy);
+        double angleDifference = Math.abs(
+                candidate.turningAngles[candidateIndex] - templatePoint.turningAngle()) / Math.PI;
+        return spatialDistance + ANGLE_WEIGHT * angleDifference;
     }
 
     /**

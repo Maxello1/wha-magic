@@ -53,6 +53,24 @@ public class SelectionEngine {
             RingDetector.RingGlyph ring,
             int maxCalls,
             ParseDetail detail) {
+        return selectInternal(candidates, ring, maxCalls, detail, true);
+    }
+
+    /** Allocation-heavy rotation reference retained package-private for equivalence tests. */
+    static SelectedSymbols selectReference(
+            List<SymbolCandidate> candidates,
+            RingDetector.RingGlyph ring,
+            int maxCalls,
+            ParseDetail detail) {
+        return selectInternal(candidates, ring, maxCalls, detail, false);
+    }
+
+    private static SelectedSymbols selectInternal(
+            List<SymbolCandidate> candidates,
+            RingDetector.RingGlyph ring,
+            int maxCalls,
+            ParseDetail detail,
+            boolean usePreparedRecognition) {
         int calls = 0;
         boolean recognitionBudgetExhausted = false;
         int unevaluatedCandidateCount = 0;
@@ -89,14 +107,23 @@ public class SelectionEngine {
                 unevaluatedCandidateCount = candidates.size() - candidateIndex;
                 break;
             }
+            PointCloudRecognizer.PreparedCandidate prepared = usePreparedRecognition
+                    ? PointCloudRecognizer.prepareCandidate(cand.strokes())
+                    : null;
+            PointCloudRecognizer.RotationWorkspace workspace = usePreparedRecognition
+                    ? prepared.newWorkspace()
+                    : null;
             
             SymbolRecognitionResult sigilRes = null;
             double sigilScore = 0;
             double sigilRoleScore = 0;
             
             if (likelySigil) {
-                sigilRes = PointCloudRecognizer.recognizeStatic(
-                        cand.strokes(), SymbolKind.SIGIL, detail);
+                sigilRes = usePreparedRecognition
+                        ? PointCloudRecognizer.recognizePrepared(
+                                prepared, 0.0, SymbolKind.SIGIL, detail, workspace)
+                        : PointCloudRecognizer.recognizeReference(
+                                cand.strokes(), SymbolKind.SIGIL, detail);
                 calls++;
                 sigilScore = sigilRes.score();
                 double centralityScore = 1.0 - clamp(cand.radialPosition() / 0.70);
@@ -117,9 +144,16 @@ public class SelectionEngine {
                     double angleToTest = (baseAngle + offset) % 360;
                     if (angleToTest < 0) angleToTest += 360;
                     
-                    List<List<Point>> rotatedStrokes = rotateStrokes(cand.strokes(), cand.centroid(), angleToTest);
-                    SymbolRecognitionResult res = PointCloudRecognizer.recognizeStatic(
-                            rotatedStrokes, SymbolKind.SIGN, detail);
+                    SymbolRecognitionResult res;
+                    if (usePreparedRecognition) {
+                        res = PointCloudRecognizer.recognizePrepared(
+                                prepared, angleToTest, SymbolKind.SIGN, detail, workspace);
+                    } else {
+                        List<List<Point>> rotatedStrokes = rotateStrokes(
+                                cand.strokes(), cand.centroid(), angleToTest);
+                        res = PointCloudRecognizer.recognizeReference(
+                                rotatedStrokes, SymbolKind.SIGN, detail);
+                    }
                     calls++;
                     
                     if (bestSignRes == null || res.score() > bestSignScore) {

@@ -71,6 +71,22 @@ public final class SpellParser {
             List<List<Point>> strokes,
             CandidateGenerationSettings settings,
             ParseDetail detail) {
+        return parseInternal(strokes, settings, detail, true);
+    }
+
+    /** Legacy rotation path retained package-private for prepared-candidate equivalence tests. */
+    static ParseResult parseReference(
+            List<List<Point>> strokes,
+            CandidateGenerationSettings settings,
+            ParseDetail detail) {
+        return parseInternal(strokes, settings, detail, false);
+    }
+
+    private static ParseResult parseInternal(
+            List<List<Point>> strokes,
+            CandidateGenerationSettings settings,
+            ParseDetail detail,
+            boolean usePreparedRecognition) {
         if (strokes == null || strokes.isEmpty()) {
             GlyphAst emptyAst = new GlyphAst(null, List.of(), List.of(), List.of());
             return new ParseResult(
@@ -96,8 +112,11 @@ public final class SpellParser {
         CandidateGenerator.GenerationResult genResult =
                 CandidateGenerator.generateCandidates(nonRingStrokes, ring, settings);
 
-        SelectionEngine.SelectedSymbols selection = SelectionEngine.select(
-                genResult.candidates(), ring, settings.maxRecognitionCalls(), detail);
+        SelectionEngine.SelectedSymbols selection = usePreparedRecognition
+                ? SelectionEngine.select(
+                        genResult.candidates(), ring, settings.maxRecognitionCalls(), detail)
+                : SelectionEngine.selectReference(
+                        genResult.candidates(), ring, settings.maxRecognitionCalls(), detail);
 
         // Anything not owned by a selected symbol/unknown remains visible as dropped
         // input. Ring strokes are intentionally excluded, and ring-prefiltered strokes
