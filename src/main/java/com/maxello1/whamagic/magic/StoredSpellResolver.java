@@ -25,22 +25,10 @@ public final class StoredSpellResolver {
             StoredSpell stored,
             List<List<Point>> strokes,
             Parser parser) {
-        return resolve(stored, strokes, true, parser);
-    }
-
-    /**
-     * Resolve with an explicit cache-trust decision. Untrusted item sources, such
-     * as client-supplied creative inventory stacks, must be parsed server-side.
-     */
-    public static Resolution resolve(
-            StoredSpell stored,
-            List<List<Point>> strokes,
-            boolean allowCachedIr,
-            Parser parser) {
         Objects.requireNonNull(parser, "parser");
         List<List<Point>> sourceStrokes = strokes == null ? List.of() : strokes;
 
-        if (allowCachedIr && stored != null && stored.isCurrentFor(sourceStrokes)) {
+        if (stored != null && stored.isCurrentFor(sourceStrokes)) {
             SpellIr cached = stored.toIr();
             if (cached.valid()) {
                 return new Resolution(cached, null, false);

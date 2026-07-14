@@ -37,7 +37,6 @@ public class SpellPaperItem extends Item {
             StoredSpellResolver.Resolution resolution = StoredSpellResolver.resolve(
                     stack.get(WitchHatMod.STORED_SPELL_COMPONENT),
                     strokes,
-                    !player.getAbilities().instabuild,
                     source -> SpellParser.parse(source, ParseDetail.RUNTIME));
             if (resolution.reparsed()) {
                 if (resolution.refreshedSpell() != null) {

@@ -60,28 +60,6 @@ class StoredSpellResolverTest {
     }
 
     @Test
-    void untrustedCurrentComponentIsReparsedExactlyOnce() {
-        StoredSpell cached = StoredSpell.fromIr(authoritativeIr(), STROKES);
-        SpellIr reparsedIr = reparsedIr();
-        AtomicInteger parseCalls = new AtomicInteger();
-
-        StoredSpellResolver.Resolution resolution = StoredSpellResolver.resolve(
-                cached,
-                STROKES,
-                false,
-                strokes -> {
-                    parseCalls.incrementAndGet();
-                    return new SpellParser.ParseResult(null, reparsedIr);
-                });
-
-        assertAll(
-                () -> assertEquals(1, parseCalls.get()),
-                () -> assertTrue(resolution.reparsed()),
-                () -> assertEquals(reparsedIr, resolution.ir()),
-                () -> assertNotNull(resolution.refreshedSpell()));
-    }
-
-    @Test
     void staleStrokeHashReparsesExactlyOnceAndRefreshesComponent() {
         StoredSpell stale = StoredSpell.fromIr(authoritativeIr(), OTHER_STROKES);
 
@@ -129,9 +107,30 @@ class StoredSpellResolverTest {
                 source.strokeHash(),
                 source.dictionaryVersion(),
                 source.dictionaryHash(),
-                source.recognizerVersion());
+                source.recognizerVersion(),
+                source.authoritySignature());
 
         assertSuccessfulRefresh(malformed);
+    }
+
+    @Test
+    void substitutedExecutionSemanticsCannotReuseAnAuthoritySignature() {
+        StoredSpell source = StoredSpell.fromIr(authoritativeIr(), STROKES);
+        StoredSpell substituted = new StoredSpell(
+                source.formatVersion(),
+                source.state(),
+                List.of(ElementType.FIRE),
+                source.signCounts(),
+                source.sigilSemantic(),
+                source.signSemantics(),
+                source.displayName(),
+                source.strokeHash(),
+                source.dictionaryVersion(),
+                source.dictionaryHash(),
+                source.recognizerVersion(),
+                source.authoritySignature());
+
+        assertSuccessfulRefresh(substituted);
     }
 
     @Test
@@ -178,6 +177,7 @@ class StoredSpellResolverTest {
                 () -> assertEquals(original.sigilSemantic(), restored.sigilSemantic()),
                 () -> assertEquals(original.signSemantics(), restored.signSemantics()),
                 () -> assertEquals(original.displayName(), restored.displayName()),
+                () -> assertFalse(stored.authoritySignature().isBlank()),
                 () -> assertTrue(restored.valid()));
     }
 

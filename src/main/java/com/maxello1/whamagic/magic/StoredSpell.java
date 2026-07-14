@@ -11,8 +11,14 @@ import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.resources.Identifier;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -33,9 +39,21 @@ public record StoredSpell(
         int strokeHash,
         String dictionaryVersion,
         String dictionaryHash,
-        String recognizerVersion
+        String recognizerVersion,
+        String authoritySignature
 ) {
     public static final int FORMAT_VERSION = 2;
+    private static final String AUTHORITY_ALGORITHM = "HmacSHA256";
+    private static final byte[] AUTHORITY_KEY = createAuthorityKey();
+    private static final ThreadLocal<Mac> AUTHORITY_MAC = ThreadLocal.withInitial(() -> {
+        try {
+            Mac mac = Mac.getInstance(AUTHORITY_ALGORITHM);
+            mac.init(new SecretKeySpec(AUTHORITY_KEY, AUTHORITY_ALGORITHM));
+            return mac;
+        } catch (Exception exception) {
+            throw new IllegalStateException("Cannot initialize stored-spell authority", exception);
+        }
+    });
 
     private static final Codec<SpellState> SPELL_STATE_CODEC = Codec.STRING.comapFlatMap(
             value -> {
@@ -95,7 +113,8 @@ public record StoredSpell(
             int strokeHash,
             String dictionaryVersion,
             String dictionaryHash,
-            String recognizerVersion
+            String recognizerVersion,
+            String authoritySignature
     ) {}
 
     private static final Codec<PersistedSpell> PERSISTED_CODEC = RecordCodecBuilder.create(instance ->
@@ -115,7 +134,9 @@ public record StoredSpell(
                     Codec.INT.fieldOf("strokeHash").forGetter(PersistedSpell::strokeHash),
                     Codec.STRING.optionalFieldOf("dictionaryVersion", "").forGetter(PersistedSpell::dictionaryVersion),
                     Codec.STRING.optionalFieldOf("dictionaryHash", "").forGetter(PersistedSpell::dictionaryHash),
-                    Codec.STRING.optionalFieldOf("recognizerVersion", "").forGetter(PersistedSpell::recognizerVersion)
+                    Codec.STRING.optionalFieldOf("recognizerVersion", "").forGetter(PersistedSpell::recognizerVersion),
+                    Codec.STRING.optionalFieldOf("authoritySignature", "")
+                            .forGetter(PersistedSpell::authoritySignature)
             ).apply(instance, PersistedSpell::new));
 
     public static final Codec<StoredSpell> CODEC = PERSISTED_CODEC.xmap(
@@ -196,10 +217,11 @@ public record StoredSpell(
                     String dictionaryVersion = ByteBufCodecs.STRING_UTF8.decode(buffer);
                     String dictionaryHash = ByteBufCodecs.STRING_UTF8.decode(buffer);
                     String recognizerVersion = ByteBufCodecs.STRING_UTF8.decode(buffer);
+                    String authoritySignature = ByteBufCodecs.STRING_UTF8.decode(buffer);
                     return new StoredSpell(
                             formatVersion, state, elements, signCounts, sigilSemantic,
                             signSemantics, displayName, strokeHash, dictionaryVersion,
-                            dictionaryHash, recognizerVersion);
+                            dictionaryHash, recognizerVersion, authoritySignature);
                 }
 
                 @Override
@@ -227,6 +249,7 @@ public record StoredSpell(
                     ByteBufCodecs.STRING_UTF8.encode(buffer, spell.dictionaryVersion());
                     ByteBufCodecs.STRING_UTF8.encode(buffer, spell.dictionaryHash());
                     ByteBufCodecs.STRING_UTF8.encode(buffer, spell.recognizerVersion());
+                    ByteBufCodecs.STRING_UTF8.encode(buffer, spell.authoritySignature());
                 }
             };
 
@@ -241,11 +264,26 @@ public record StoredSpell(
         dictionaryVersion = safeString(dictionaryVersion);
         dictionaryHash = safeString(dictionaryHash);
         recognizerVersion = safeString(recognizerVersion);
+        authoritySignature = safeString(authoritySignature);
     }
 
     /** Build a current authoritative component from a successful server parse. */
     public static StoredSpell fromIr(SpellIr ir, List<List<Point>> strokes) {
         SpellDictionary.DictionarySnapshot dictionary = SpellDictionary.snapshot();
+        int strokeHash = computeStrokeHash(strokes);
+        String recognizerVersion = PointCloudRecognizer.RECOGNIZER_VERSION;
+        String authoritySignature = signCompiledPayload(
+                FORMAT_VERSION,
+                ir.state(),
+                ir.elements(),
+                ir.signCounts(),
+                ir.sigilSemantic(),
+                ir.signSemantics(),
+                ir.displayName(),
+                strokeHash,
+                dictionary.version(),
+                dictionary.hash(),
+                recognizerVersion);
         return new StoredSpell(
                 FORMAT_VERSION,
                 ir.state(),
@@ -254,10 +292,11 @@ public record StoredSpell(
                 ir.sigilSemantic(),
                 ir.signSemantics(),
                 ir.displayName(),
-                computeStrokeHash(strokes),
+                strokeHash,
                 dictionary.version(),
                 dictionary.hash(),
-                PointCloudRecognizer.RECOGNIZER_VERSION);
+                recognizerVersion,
+                authoritySignature);
     }
 
     /** True only when every input that governs execution still matches. */
@@ -270,7 +309,19 @@ public record StoredSpell(
                 && strokeHash == computeStrokeHash(strokes)
                 && dictionary.version().equals(dictionaryVersion)
                 && dictionary.hash().equals(dictionaryHash)
-                && PointCloudRecognizer.RECOGNIZER_VERSION.equals(recognizerVersion);
+                && PointCloudRecognizer.RECOGNIZER_VERSION.equals(recognizerVersion)
+                && authoritySignature.equals(signCompiledPayload(
+                        formatVersion,
+                        state,
+                        elements,
+                        signCounts,
+                        sigilSemantic,
+                        signSemantics,
+                        displayName,
+                        strokeHash,
+                        dictionaryVersion,
+                        dictionaryHash,
+                        recognizerVersion));
     }
 
     private boolean hasValidCompiledPayload(SpellDictionary.DictionarySnapshot dictionary) {
@@ -377,6 +428,109 @@ public record StoredSpell(
         return hash;
     }
 
+    private static byte[] createAuthorityKey() {
+        byte[] key = new byte[32];
+        new SecureRandom().nextBytes(key);
+        return key;
+    }
+
+    private static String signCompiledPayload(
+            int formatVersion,
+            SpellState state,
+            List<ElementType> elements,
+            Map<Identifier, Integer> signCounts,
+            SigilSemantic sigilSemantic,
+            List<SignSemantic> signSemantics,
+            String displayName,
+            int strokeHash,
+            String dictionaryVersion,
+            String dictionaryHash,
+            String recognizerVersion) {
+        Mac mac = AUTHORITY_MAC.get();
+        mac.reset();
+        updateString(mac, "wha-magic/stored-spell-authority");
+        updateInt(mac, formatVersion);
+        updateString(mac, state == null ? "" : state.name());
+
+        updateInt(mac, elements.size());
+        for (ElementType element : elements) {
+            updateString(mac, element == null ? "" : element.name());
+        }
+
+        updateInt(mac, signCounts.size());
+        signCounts.entrySet().stream()
+                .sorted(Comparator.comparing(entry -> entry.getKey().toString()))
+                .forEach(entry -> {
+                    updateString(mac, entry.getKey().toString());
+                    updateInt(mac, entry.getValue() == null ? 0 : entry.getValue());
+                });
+
+        if (sigilSemantic == null) {
+            updateInt(mac, 0);
+        } else {
+            updateInt(mac, 1);
+            updateSigilSemantic(mac, sigilSemantic);
+        }
+
+        updateInt(mac, signSemantics.size());
+        for (SignSemantic semantic : signSemantics) {
+            updateSignSemantic(mac, semantic);
+        }
+        updateString(mac, safeString(displayName));
+        updateInt(mac, strokeHash);
+        updateString(mac, safeString(dictionaryVersion));
+        updateString(mac, safeString(dictionaryHash));
+        updateString(mac, safeString(recognizerVersion));
+        return HexFormat.of().formatHex(mac.doFinal());
+    }
+
+    private static void updateSigilSemantic(Mac mac, SigilSemantic semantic) {
+        updateLong(mac, Double.doubleToLongBits(semantic.force()));
+        updateLong(mac, Double.doubleToLongBits(semantic.focus()));
+        updateLong(mac, Double.doubleToLongBits(semantic.spread()));
+        updateLong(mac, Double.doubleToLongBits(semantic.range()));
+        updateLong(mac, Double.doubleToLongBits(semantic.lifetimeBias()));
+    }
+
+    private static void updateSignSemantic(Mac mac, SignSemantic semantic) {
+        if (semantic == null) {
+            updateInt(mac, 0);
+            return;
+        }
+        updateInt(mac, 1);
+        updateString(mac, safeString(semantic.manifestation()));
+        updateString(mac, safeString(semantic.directionMode()));
+        updateLong(mac, Double.doubleToLongBits(semantic.force()));
+        updateLong(mac, Double.doubleToLongBits(semantic.focus()));
+        updateLong(mac, Double.doubleToLongBits(semantic.spread()));
+        updateLong(mac, Double.doubleToLongBits(semantic.range()));
+        updateLong(mac, Double.doubleToLongBits(semantic.lifetimeBias()));
+    }
+
+    private static void updateString(Mac mac, String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        updateInt(mac, bytes.length);
+        mac.update(bytes);
+    }
+
+    private static void updateInt(Mac mac, int value) {
+        mac.update((byte) (value >>> 24));
+        mac.update((byte) (value >>> 16));
+        mac.update((byte) (value >>> 8));
+        mac.update((byte) value);
+    }
+
+    private static void updateLong(Mac mac, long value) {
+        mac.update((byte) (value >>> 56));
+        mac.update((byte) (value >>> 48));
+        mac.update((byte) (value >>> 40));
+        mac.update((byte) (value >>> 32));
+        mac.update((byte) (value >>> 24));
+        mac.update((byte) (value >>> 16));
+        mac.update((byte) (value >>> 8));
+        mac.update((byte) value);
+    }
+
     private static StoredSpell fromPersisted(PersistedSpell persisted) {
         List<ElementType> elements = new ArrayList<>(persisted.elements());
         if (elements.isEmpty() && !persisted.legacyElement().isBlank()) {
@@ -408,7 +562,8 @@ public record StoredSpell(
                 persisted.strokeHash(),
                 persisted.dictionaryVersion(),
                 persisted.dictionaryHash(),
-                persisted.recognizerVersion());
+                persisted.recognizerVersion(),
+                persisted.authoritySignature());
     }
 
     private PersistedSpell toPersisted() {
@@ -426,7 +581,8 @@ public record StoredSpell(
                 strokeHash,
                 dictionaryVersion,
                 dictionaryHash,
-                recognizerVersion);
+                recognizerVersion,
+                authoritySignature);
     }
 
     private static String safeString(String value) {
