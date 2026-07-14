@@ -124,11 +124,17 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         private final double[] normalizedY;
         private final int[] sampleStrokeIds;
         private final double[] sampleTurningAngles;
+        private final int closedContourCount;
+        private final double complexity;
+        private final double dimensionRatio;
+        private final boolean closedSingleStroke;
+        private final double centralSymmetryError;
         private final double[] rawX;
         private final double[] rawY;
         private final int[] strokeOffsets;
         private final double originX;
         private final double originY;
+        private final double rawPathLength;
 
         private PreparedCandidate(
                 RecognitionRejectionReason preparationFailure,
@@ -137,22 +143,34 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                 double[] normalizedY,
                 int[] sampleStrokeIds,
                 double[] sampleTurningAngles,
+                int closedContourCount,
+                double complexity,
+                double dimensionRatio,
+                boolean closedSingleStroke,
+                double centralSymmetryError,
                 double[] rawX,
                 double[] rawY,
                 int[] strokeOffsets,
                 double originX,
-                double originY) {
+                double originY,
+                double rawPathLength) {
             this.preparationFailure = preparationFailure;
             this.strokeCount = strokeCount;
             this.normalizedX = normalizedX;
             this.normalizedY = normalizedY;
             this.sampleStrokeIds = sampleStrokeIds;
             this.sampleTurningAngles = sampleTurningAngles;
+            this.closedContourCount = closedContourCount;
+            this.complexity = complexity;
+            this.dimensionRatio = dimensionRatio;
+            this.closedSingleStroke = closedSingleStroke;
+            this.centralSymmetryError = centralSymmetryError;
             this.rawX = rawX;
             this.rawY = rawY;
             this.strokeOffsets = strokeOffsets;
             this.originX = originX;
             this.originY = originY;
+            this.rawPathLength = rawPathLength;
         }
 
         RotationWorkspace newWorkspace() {
@@ -306,6 +324,13 @@ public class PointCloudRecognizer implements SymbolRecognizer {
             sampleStrokeIds[i] = normalized[i].strokeId();
             sampleTurningAngles[i] = normalized[i].turningAngle();
         }
+        int closedContourCount = closedContourCount(strokes);
+        double complexity = candidateComplexity(strokes);
+        double dimensionRatio = candidateDimensionRatio(strokes);
+        boolean closedSingleStroke = isClosedSingleStroke(strokes);
+        double symmetryError = closedSingleStroke
+                ? centralSymmetryError(normalized)
+                : 0.0;
 
         int rawPointCount = 0;
         for (List<Point> stroke : strokes) {
@@ -317,15 +342,23 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         int rawIndex = 0;
         double originX = 0.0;
         double originY = 0.0;
+        double rawPathLength = 0.0;
         for (int strokeIndex = 0; strokeIndex < strokes.size(); strokeIndex++) {
             strokeOffsets[strokeIndex] = rawIndex;
             List<Point> stroke = strokes.get(strokeIndex);
             if (stroke == null) continue;
-            for (Point point : stroke) {
+            for (int pointIndex = 0; pointIndex < stroke.size(); pointIndex++) {
+                Point point = stroke.get(pointIndex);
                 rawX[rawIndex] = point.x;
                 rawY[rawIndex] = point.y;
                 originX += point.x;
                 originY += point.y;
+                if (pointIndex > 0) {
+                    Point previous = stroke.get(pointIndex - 1);
+                    rawPathLength += Math.hypot(
+                            point.x - previous.x,
+                            point.y - previous.y);
+                }
                 rawIndex++;
             }
         }
@@ -337,11 +370,17 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                 normalizedY,
                 sampleStrokeIds,
                 sampleTurningAngles,
+                closedContourCount,
+                complexity,
+                dimensionRatio,
+                closedSingleStroke,
+                symmetryError,
                 rawX,
                 rawY,
                 strokeOffsets,
                 originX / rawPointCount,
-                originY / rawPointCount);
+                originY / rawPointCount,
+                rawPathLength);
     }
 
     private static PreparedCandidate failedPreparation(
@@ -353,9 +392,15 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                 new double[0],
                 new int[0],
                 new double[0],
+                0,
+                0.0,
+                0.0,
+                false,
+                0.0,
                 new double[0],
                 new double[0],
                 new int[Math.max(1, strokeCount + 1)],
+                0.0,
                 0.0,
                 0.0);
     }
@@ -789,6 +834,12 @@ public class PointCloudRecognizer implements SymbolRecognizer {
             System.arraycopy(candidate.normalizedY, 0, workspace.normalizedY, 0, N);
             System.arraycopy(
                     candidate.sampleTurningAngles, 0, workspace.turningAngles, 0, N);
+            workspace.closedContourCount = candidate.closedContourCount;
+            workspace.complexity = candidate.complexity;
+            workspace.dimensionRatio = candidate.dimensionRatio;
+            workspace.closedSingleStroke = candidate.closedSingleStroke;
+            workspace.centralSymmetryError = candidate.centralSymmetryError;
+            return;
         } else {
             double minX = Double.MAX_VALUE;
             double minY = Double.MAX_VALUE;
@@ -830,17 +881,10 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         double rawMaxX = -Double.MAX_VALUE;
         double rawMaxY = -Double.MAX_VALUE;
         for (int i = 0; i < candidate.rawX.length; i++) {
-            double rotatedX;
-            double rotatedY;
-            if (rotationDeg == 0.0) {
-                rotatedX = candidate.rawX[i];
-                rotatedY = candidate.rawY[i];
-            } else {
-                double relativeX = candidate.rawX[i] - candidate.originX;
-                double relativeY = candidate.rawY[i] - candidate.originY;
-                rotatedX = relativeX * cosine - relativeY * sine + candidate.originX;
-                rotatedY = relativeX * sine + relativeY * cosine + candidate.originY;
-            }
+            double relativeX = candidate.rawX[i] - candidate.originX;
+            double relativeY = candidate.rawY[i] - candidate.originY;
+            double rotatedX = relativeX * cosine - relativeY * sine + candidate.originX;
+            double rotatedY = relativeX * sine + relativeY * cosine + candidate.originY;
             workspace.rotatedRawX[i] = rotatedX;
             workspace.rotatedRawY[i] = rotatedY;
             rawMinX = Math.min(rawMinX, rotatedX);
@@ -855,18 +899,9 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         workspace.dimensionRatio = longerDimension < 1e-10
                 ? 0.0
                 : Math.min(width, height) / longerDimension;
-
-        double pathLength = 0.0;
-        for (int stroke = 0; stroke < candidate.strokeCount; stroke++) {
-            int start = candidate.strokeOffsets[stroke];
-            int end = candidate.strokeOffsets[stroke + 1];
-            for (int point = start + 1; point < end; point++) {
-                pathLength += rawDistance(workspace, point - 1, point);
-            }
-        }
         workspace.complexity = workspace.drawingDiagonal < 1e-10
                 ? 0.0
-                : pathLength / workspace.drawingDiagonal;
+                : candidate.rawPathLength / workspace.drawingDiagonal;
         workspace.closedContourCount = countClosedContours(candidate, workspace);
         workspace.closedSingleStroke = isClosedSingleStroke(candidate, workspace);
         workspace.centralSymmetryError = workspace.closedSingleStroke
