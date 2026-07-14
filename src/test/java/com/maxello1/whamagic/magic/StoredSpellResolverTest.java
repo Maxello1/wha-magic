@@ -6,6 +6,9 @@ import com.maxello1.whamagic.parser.Point;
 import com.maxello1.whamagic.parser.SpellDictionary;
 import com.maxello1.whamagic.parser.SpellParser;
 import com.mojang.serialization.JsonOps;
+import io.netty.buffer.Unpooled;
+import net.minecraft.core.RegistryAccess;
+import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -91,6 +94,25 @@ class StoredSpellResolverTest {
     }
 
     @Test
+    void malformedCurrentStampedPayloadReparsesInsteadOfExecuting() {
+        StoredSpell source = StoredSpell.fromIr(authoritativeIr(), STROKES);
+        StoredSpell malformed = new StoredSpell(
+                source.formatVersion(),
+                source.state(),
+                List.of(),
+                source.signCounts(),
+                source.sigilSemantic(),
+                source.signSemantics(),
+                source.displayName(),
+                source.strokeHash(),
+                source.dictionaryVersion(),
+                source.dictionaryHash(),
+                source.recognizerVersion());
+
+        assertSuccessfulRefresh(malformed);
+    }
+
+    @Test
     void invalidStaleParseResultIsRejectedAndNotCached() {
         StoredSpell stale = StoredSpell.fromIr(authoritativeIr(), OTHER_STROKES);
         AtomicInteger parseCalls = new AtomicInteger();
@@ -135,6 +157,30 @@ class StoredSpellResolverTest {
                 () -> assertEquals(original.signSemantics(), restored.signSemantics()),
                 () -> assertEquals(original.displayName(), restored.displayName()),
                 () -> assertTrue(restored.valid()));
+    }
+
+    @Test
+    void persistentAndNetworkCodecsRoundTripAllCompiledFields() {
+        StoredSpell expected = StoredSpell.fromIr(authoritativeIr(), STROKES);
+        StoredSpell persistent = StoredSpell.CODEC.parse(
+                        JsonOps.INSTANCE,
+                        StoredSpell.CODEC.encodeStart(JsonOps.INSTANCE, expected)
+                                .result().orElseThrow())
+                .result().orElseThrow();
+
+        RegistryFriendlyByteBuf buffer = new RegistryFriendlyByteBuf(
+                Unpooled.buffer(), RegistryAccess.EMPTY);
+        StoredSpell network;
+        try {
+            StoredSpell.STREAM_CODEC.encode(buffer, expected);
+            network = StoredSpell.STREAM_CODEC.decode(buffer);
+        } finally {
+            buffer.release();
+        }
+
+        assertAll(
+                () -> assertEquals(expected, persistent),
+                () -> assertEquals(expected, network));
     }
 
     @Test
@@ -231,6 +277,8 @@ class StoredSpellResolverTest {
                 new SigilSemantic(0.75, 0.60, -0.10, 0.45, 0.25),
                 List.of(
                         new SignSemantic("levitation", "up", 0.25, 0.30, 0.15, 0.50, 0.10),
+                        new SignSemantic("levitation", "up", 0.25, 0.30, 0.15, 0.50, 0.10),
+                        new SignSemantic("levitation", "up", 0.25, 0.30, 0.15, 0.50, 0.10),
                         new SignSemantic("convergence", "inward", 0.05, 0.70, -0.25, 0.10, 0.20)),
                 "earth levitation",
                 "ready");
@@ -243,8 +291,11 @@ class StoredSpellResolverTest {
                 List.of(ElementType.FIRE),
                 Map.of(CONVERGENCE, 2),
                 new SigilSemantic(0.90, 0.55, 0.05, 0.30, 0.40),
-                List.of(new SignSemantic(
-                        "convergence", "inward", 0.10, 0.80, -0.30, 0.15, 0.35)),
+                List.of(
+                        new SignSemantic(
+                                "convergence", "inward", 0.10, 0.80, -0.30, 0.15, 0.35),
+                        new SignSemantic(
+                                "convergence", "inward", 0.10, 0.80, -0.30, 0.15, 0.35)),
                 "focused fire",
                 "ready");
     }

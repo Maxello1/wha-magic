@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** Persistent, server-authoritative compiled representation of a saved spell. */
 public record StoredSpell(
@@ -264,11 +266,69 @@ public record StoredSpell(
         return formatVersion == FORMAT_VERSION
                 && state != null
                 && (state == SpellState.PREPARED || state == SpellState.ACTIVE)
-                && sigilSemantic != null
+                && hasValidCompiledPayload(dictionary)
                 && strokeHash == computeStrokeHash(strokes)
                 && dictionary.version().equals(dictionaryVersion)
                 && dictionary.hash().equals(dictionaryHash)
                 && PointCloudRecognizer.RECOGNIZER_VERSION.equals(recognizerVersion);
+    }
+
+    private boolean hasValidCompiledPayload(SpellDictionary.DictionarySnapshot dictionary) {
+        if (elements.isEmpty()
+                || elements.size() > CandidateGenerationSettings.DEFAULTS.maxCandidates()
+                || displayName.isBlank()
+                || !validSigilSemantic(sigilSemantic)) {
+            return false;
+        }
+
+        Set<Identifier> knownSignIds = dictionary.templates().stream()
+                .filter(template -> template.kind() == SymbolKind.SIGN)
+                .map(template -> Identifier.tryParse(template.semanticId()))
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toUnmodifiableSet());
+        int signTotal = 0;
+        for (Map.Entry<Identifier, Integer> entry : signCounts.entrySet()) {
+            Integer count = entry.getValue();
+            if (!knownSignIds.contains(entry.getKey())
+                    || count == null
+                    || count <= 0
+                    || count > CandidateGenerationSettings.DEFAULTS.maxCandidates()) {
+                return false;
+            }
+            signTotal += count;
+            if (signTotal > CandidateGenerationSettings.DEFAULTS.maxCandidates()) {
+                return false;
+            }
+        }
+        if (signSemantics.size() != signTotal) {
+            return false;
+        }
+        for (SignSemantic semantic : signSemantics) {
+            if (!validSignSemantic(semantic)) return false;
+        }
+        return true;
+    }
+
+    private static boolean validSigilSemantic(SigilSemantic semantic) {
+        return semantic != null
+                && Double.isFinite(semantic.force())
+                && Double.isFinite(semantic.focus())
+                && Double.isFinite(semantic.spread())
+                && Double.isFinite(semantic.range())
+                && Double.isFinite(semantic.lifetimeBias());
+    }
+
+    private static boolean validSignSemantic(SignSemantic semantic) {
+        return semantic != null
+                && semantic.manifestation() != null
+                && !semantic.manifestation().isBlank()
+                && semantic.directionMode() != null
+                && !semantic.directionMode().isBlank()
+                && Double.isFinite(semantic.force())
+                && Double.isFinite(semantic.focus())
+                && Double.isFinite(semantic.spread())
+                && Double.isFinite(semantic.range())
+                && Double.isFinite(semantic.lifetimeBias());
     }
 
     /** Reconstruct the execution IR directly, without recognition or parsing. */
