@@ -3,6 +3,7 @@ package com.maxello1.whamagic.dev;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.maxello1.whamagic.magic.RecognitionAlternative;
 import com.maxello1.whamagic.magic.RecognizedSigil;
@@ -24,6 +25,7 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.TreeMap;
 
@@ -31,10 +33,11 @@ import java.util.TreeMap;
 public final class SampleRecorder {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SampleRecorder.class);
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final Gson GSON = new GsonBuilder().serializeNulls().setPrettyPrinting().create();
     private static final Path SAMPLES_DIRECTORY = Path.of("run", "dev-samples");
     private static final DateTimeFormatter FILE_TIMESTAMP =
             DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss-SSS");
+    static final int MAX_FILENAME_LENGTH = 180;
 
     private SampleRecorder() {}
 
@@ -49,10 +52,10 @@ public final class SampleRecorder {
     public static String saveSample(
             List<List<Point>> rawStrokes,
             SpellParser.ParseResult result,
-            String notes) {
+            RecognitionSampleMetadata metadata) {
         LocalDateTime recordedAt = LocalDateTime.now();
         try {
-            Path file = writeSample(SAMPLES_DIRECTORY, rawStrokes, result, notes, recordedAt);
+            Path file = writeSample(SAMPLES_DIRECTORY, rawStrokes, result, metadata, recordedAt);
             LOGGER.info("Sample saved: {}", file);
             return file.toString();
         } catch (IOException exception) {
@@ -65,20 +68,37 @@ public final class SampleRecorder {
             Path samplesDirectory,
             List<List<Point>> rawStrokes,
             SpellParser.ParseResult result,
-            String notes,
+            RecognitionSampleMetadata metadata,
             LocalDateTime recordedAt) throws IOException {
         Objects.requireNonNull(samplesDirectory, "samplesDirectory");
+        Objects.requireNonNull(metadata, "metadata");
         Objects.requireNonNull(recordedAt, "recordedAt");
 
         Files.createDirectories(samplesDirectory);
-        Path file = samplesDirectory.resolve(
-                "sample_" + recordedAt.format(FILE_TIMESTAMP)
-                        + '_' + layoutLabel(result) + ".json").toAbsolutePath();
-        JsonObject sample = createSample(rawStrokes, result, notes, recordedAt);
+        Path file = samplesDirectory.resolve(buildFilename(metadata, result, recordedAt)).toAbsolutePath();
+        JsonObject sample = createSample(rawStrokes, result, metadata, recordedAt);
         try (Writer writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
             GSON.toJson(sample, writer);
         }
         return file;
+    }
+
+    static String buildFilename(
+            RecognitionSampleMetadata metadata,
+            SpellParser.ParseResult result,
+            LocalDateTime recordedAt) {
+        String timestamp = "sample_" + recordedAt.format(FILE_TIMESTAMP) + '_';
+        String name = metadata.sampleName().isEmpty() ? "" : fileSafe(metadata.sampleName()) + '_';
+        String intended = intendedLayoutLabel(metadata);
+        String actual = truncateLabel(actualSymbolsLabel(result), 64);
+        String validity = result == null ? "unparsed" : result.isValidSpell() ? "valid" : "invalid";
+        String suffix = "__got-" + actual + '_' + validity + ".json";
+        String middle = name + intended;
+        int allowedMiddleLength = Math.max(1, MAX_FILENAME_LENGTH - timestamp.length() - suffix.length());
+        if (middle.length() > allowedMiddleLength) {
+            middle = trimDashes(middle.substring(0, allowedMiddleLength));
+        }
+        return timestamp + (middle.isEmpty() ? "intent-unspecified" : middle) + suffix;
     }
 
     static String layoutLabel(SpellParser.ParseResult result) {
@@ -115,29 +135,89 @@ public final class SampleRecorder {
         return label.length() <= 96 ? label.toString() : label.substring(0, 96);
     }
 
-    private static String fileSafe(String value) {
-        String safe = value.toLowerCase(java.util.Locale.ROOT)
+    static String fileSafe(String value) {
+        String safe = value.toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9-]+", "-")
                 .replaceAll("^-+|-+$", "");
         return safe.isEmpty() ? "unknown" : safe;
     }
 
+    private static String intendedLayoutLabel(RecognitionSampleMetadata metadata) {
+        StringBuilder label = new StringBuilder();
+        for (RecognitionSampleMetadata.IntendedSymbol symbol : metadata.intendedSymbols()) {
+            if (!label.isEmpty()) label.append('_');
+            label.append(fileSafe(symbol.id().getPath()));
+            if (symbol.rotationDeg() != null) {
+                label.append("-r").append(rotationLabel(symbol.rotationDeg()));
+            }
+        }
+        if (metadata.includesCircle()) {
+            if (!label.isEmpty()) label.append('_');
+            label.append("ring");
+        }
+        return label.isEmpty() ? "intent-unspecified" : label.toString();
+    }
+
+    private static String actualSymbolsLabel(SpellParser.ParseResult result) {
+        if (result == null || result.ast == null) return "unknown";
+        TreeMap<String, Integer> symbols = new TreeMap<>();
+        for (RecognizedSigil sigil : result.ast.sigils()) {
+            if (sigil.id() != null) symbols.merge(fileSafe(sigil.id().getPath()), 1, Integer::sum);
+        }
+        for (RecognizedSign sign : result.ast.signs()) {
+            if (sign.id() != null && !sign.id().isBlank()) {
+                String id = sign.id();
+                int colon = id.indexOf(':');
+                symbols.merge(fileSafe(colon >= 0 ? id.substring(colon + 1) : id), 1, Integer::sum);
+            }
+        }
+        if (symbols.isEmpty()) return "unknown";
+        StringBuilder label = new StringBuilder();
+        symbols.forEach((symbol, count) -> {
+            if (!label.isEmpty()) label.append('-');
+            label.append(symbol);
+            if (count > 1) label.append("-x").append(count);
+        });
+        return label.toString();
+    }
+
+    private static String rotationLabel(double rotation) {
+        if (rotation == Math.rint(rotation)) {
+            return String.format(Locale.ROOT, "%03d", (int) rotation);
+        }
+        String text = Double.toString(rotation).replace('.', 'p');
+        return rotation < 100.0 ? "0" + (rotation < 10.0 ? "0" : "") + text : text;
+    }
+
+    private static String trimDashes(String value) {
+        return value.replaceAll("[-_]+$", "");
+    }
+
+    private static String truncateLabel(String value, int maximumLength) {
+        return value.length() <= maximumLength
+                ? value
+                : trimDashes(value.substring(0, maximumLength));
+    }
+
     private static JsonObject createSample(
             List<List<Point>> rawStrokes,
             SpellParser.ParseResult result,
-            String notes,
+            RecognitionSampleMetadata metadata,
             LocalDateTime recordedAt) {
         SpellDictionary.DictionarySnapshot dictionary = SpellDictionary.snapshot();
         JsonObject sample = new JsonObject();
-        sample.addProperty("formatVersion", 3);
+        sample.addProperty("formatVersion", 4);
         sample.addProperty("recognizerVersion", PointCloudRecognizer.RECOGNIZER_VERSION);
         sample.addProperty("dictionaryVersion", dictionary.version());
         sample.addProperty("dictionaryHash", dictionary.hash());
-        sample.addProperty("sampleRole", "experimental");
-        sample.add("expectedIntent", emptyExpectedIntent());
-        sample.addProperty("notes", notes == null ? "" : notes);
+        sample.addProperty("sampleName", metadata.sampleName());
+        sample.addProperty("sampleRole", metadata.sampleRole().jsonName());
+        sample.add("expectedIntent", expectedIntentJson(metadata));
+        sample.addProperty("expectedValid", metadata.expectedValid());
+        sample.addProperty("notes", metadata.notes());
         sample.addProperty("sourceDate", recordedAt.toLocalDate().toString());
-        sample.addProperty("influencedTemplateOrThreshold", false);
+        sample.addProperty(
+                "influencedTemplateOrThreshold", metadata.influencedTemplateOrThreshold());
         sample.addProperty("timestamp", recordedAt.toString());
         sample.add("rawStrokes", rawStrokesJson(rawStrokes));
         if (result != null) {
@@ -146,11 +226,26 @@ public final class SampleRecorder {
         return sample;
     }
 
-    private static JsonObject emptyExpectedIntent() {
+    private static JsonObject expectedIntentJson(RecognitionSampleMetadata metadata) {
         JsonObject expectedIntent = new JsonObject();
-        expectedIntent.add("sigils", new JsonArray());
-        expectedIntent.add("signs", new JsonArray());
+        expectedIntent.add("sigils", intendedSymbolsJson(metadata.sigils()));
+        expectedIntent.add("signs", intendedSymbolsJson(metadata.signs()));
+        expectedIntent.addProperty("ring", metadata.includesCircle());
+        expectedIntent.addProperty("ringStyle", metadata.ringStyle().jsonName());
         return expectedIntent;
+    }
+
+    private static JsonArray intendedSymbolsJson(
+            List<RecognitionSampleMetadata.IntendedSymbol> symbols) {
+        JsonArray json = new JsonArray();
+        for (RecognitionSampleMetadata.IntendedSymbol symbol : symbols) {
+            JsonObject entry = new JsonObject();
+            entry.addProperty("id", symbol.id().toString());
+            if (symbol.rotationDeg() == null) entry.add("rotationDeg", JsonNull.INSTANCE);
+            else entry.addProperty("rotationDeg", symbol.rotationDeg());
+            json.add(entry);
+        }
+        return json;
     }
 
     private static JsonArray rawStrokesJson(List<List<Point>> rawStrokes) {

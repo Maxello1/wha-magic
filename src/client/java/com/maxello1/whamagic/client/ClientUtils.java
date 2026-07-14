@@ -16,8 +16,7 @@ public final class ClientUtils {
                 payload.originalStrokeItemHash(),
                 payload.limits(),
                 payload.strokes());
-        activeSpellScreen = screen;
-        Minecraft.getInstance().setScreenAndShow(screen);
+        showSpellScreen(screen);
     }
 
     public static void handleEditResult(SpellEditResultPayload payload) {
@@ -34,5 +33,10 @@ public final class ClientUtils {
         if (activeSpellScreen == screen) {
             activeSpellScreen = null;
         }
+    }
+
+    static void showSpellScreen(SpellDrawingScreen screen) {
+        activeSpellScreen = screen;
+        Minecraft.getInstance().setScreenAndShow(screen);
     }
 }

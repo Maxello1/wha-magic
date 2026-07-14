@@ -227,17 +227,17 @@ public class SpellDrawingScreen extends Screen {
             return true;
         }
         if (event.key() == GLFW.GLFW_KEY_F5) {
-            flushPreview();
-            String path = com.maxello1.whamagic.dev.SampleRecorder.saveSample(
-                    editor.strokes(),
-                    lastParseResult,
-                    null);
-            if (path != null) {
-                sampleFeedback = "Sample saved: " + path;
-            } else {
-                sampleFeedback = "Failed to save sample";
+            if (savePending) {
+                showLimitError("Wait for the spell save to finish before recording a sample.");
+                return true;
             }
-            sampleFeedbackTime = System.currentTimeMillis();
+            flushPreview();
+            if (minecraft != null) {
+                minecraft.setScreenAndShow(new SaveRecognitionSampleScreen(
+                        this,
+                        new com.maxello1.whamagic.dev.RecognitionSampleCapture(
+                                editor.strokes(), lastParseResult)));
+            }
             return true;
         }
         if (event.key() == GLFW.GLFW_KEY_Z) {
@@ -397,6 +397,13 @@ public class SpellDrawingScreen extends Screen {
     public void removed() {
         ClientUtils.clearSpellScreen(this);
         super.removed();
+    }
+
+    void returnFromSampleScreen(String message, boolean success) {
+        sampleFeedback = message;
+        sampleFeedbackTime = System.currentTimeMillis();
+        editorMessageColor = success ? 0xFF55FF55 : 0xFFFF5555;
+        ClientUtils.showSpellScreen(this);
     }
 
     private void showLimitError(String message) {

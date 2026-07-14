@@ -43,7 +43,11 @@ public final class SpellDictionary {
 
     private SpellDictionary() {}
 
-    public record TemplateIdentity(String semanticId, String templateId, SymbolKind kind) {}
+    public record TemplateIdentity(
+            String semanticId,
+            String templateId,
+            String displayName,
+            SymbolKind kind) {}
 
     public record DictionarySnapshot(
             String version,
@@ -176,7 +180,8 @@ public final class SpellDictionary {
                                     + definition.templateId() + "'", exception);
                 }
                 identities.add(new TemplateIdentity(
-                        definition.semanticId(), definition.templateId(), definition.kind()));
+                        definition.semanticId(), definition.templateId(),
+                        definition.displayName(), definition.kind()));
             }
 
             DictionarySnapshot metadata = new DictionarySnapshot(
