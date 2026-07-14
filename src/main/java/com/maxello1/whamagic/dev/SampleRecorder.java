@@ -25,6 +25,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Objects;
+import java.util.TreeMap;
 
 /** Saves development drawings and their recognition results as JSON samples. */
 public final class SampleRecorder {
@@ -71,12 +72,54 @@ public final class SampleRecorder {
 
         Files.createDirectories(samplesDirectory);
         Path file = samplesDirectory.resolve(
-                "sample_" + recordedAt.format(FILE_TIMESTAMP) + ".json").toAbsolutePath();
+                "sample_" + recordedAt.format(FILE_TIMESTAMP)
+                        + '_' + layoutLabel(result) + ".json").toAbsolutePath();
         JsonObject sample = createSample(rawStrokes, result, notes, recordedAt);
         try (Writer writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
             GSON.toJson(sample, writer);
         }
         return file;
+    }
+
+    static String layoutLabel(SpellParser.ParseResult result) {
+        if (result == null) {
+            return "unparsed";
+        }
+
+        TreeMap<String, Integer> symbols = new TreeMap<>();
+        if (result.ast != null) {
+            for (RecognizedSigil sigil : result.ast.sigils()) {
+                if (sigil.id() != null) {
+                    symbols.merge(sigil.id().getPath(), 1, Integer::sum);
+                }
+            }
+            for (RecognizedSign sign : result.ast.signs()) {
+                if (sign.id() != null && !sign.id().isBlank()) {
+                    symbols.merge(sign.id(), 1, Integer::sum);
+                }
+            }
+        }
+
+        String status = result.isValidSpell() ? "valid" : "invalid";
+        if (symbols.isEmpty()) {
+            return status + "_unknown";
+        }
+
+        StringBuilder label = new StringBuilder(status);
+        symbols.forEach((symbol, count) -> {
+            label.append('_').append(fileSafe(symbol));
+            if (count > 1) {
+                label.append("-x").append(count);
+            }
+        });
+        return label.length() <= 96 ? label.toString() : label.substring(0, 96);
+    }
+
+    private static String fileSafe(String value) {
+        String safe = value.toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("[^a-z0-9-]+", "-")
+                .replaceAll("^-+|-+$", "");
+        return safe.isEmpty() ? "unknown" : safe;
     }
 
     private static JsonObject createSample(

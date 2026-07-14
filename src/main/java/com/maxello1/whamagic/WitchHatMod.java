@@ -5,14 +5,20 @@ import com.maxello1.whamagic.item.InkWandItem;
 import com.maxello1.whamagic.item.SpellPaperItem;
 import com.maxello1.whamagic.magic.SpellStackUpdater;
 import com.maxello1.whamagic.magic.StoredSpell;
+import com.maxello1.whamagic.network.CancelSpellEditPayload;
+import com.maxello1.whamagic.network.BoundedStrokeStreamCodec;
+import com.maxello1.whamagic.network.DrawingLimits;
 import com.maxello1.whamagic.network.OpenSpellScreenPayload;
 import com.maxello1.whamagic.network.SaveSpellPayload;
+import com.maxello1.whamagic.network.SpellEditResultPayload;
+import com.maxello1.whamagic.network.SpellEditSessionManager;
 import com.maxello1.whamagic.parser.Point;
 import com.maxello1.whamagic.parser.SpellDictionary;
 import com.maxello1.whamagic.parser.SpellParser;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.Registry;
 import net.minecraft.core.component.DataComponentType;
@@ -38,6 +44,7 @@ public class WitchHatMod implements ModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
     private static final Map<UUID, Long> PARSE_COOLDOWNS = new ConcurrentHashMap<>();
+    private static final SpellEditSessionManager EDIT_SESSIONS = new SpellEditSessionManager();
 
     public static final ResourceKey<Item> SPELL_PAPER_KEY = ResourceKey.create(
             Registries.ITEM, Identifier.fromNamespaceAndPath(MOD_ID, "spell_paper"));
@@ -80,29 +87,90 @@ public class WitchHatMod implements ModInitializer {
         WhaServerConfig.load();
 
         PayloadTypeRegistry.serverboundPlay().register(SaveSpellPayload.ID, SaveSpellPayload.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(
+                CancelSpellEditPayload.ID,
+                CancelSpellEditPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(OpenSpellScreenPayload.ID, OpenSpellScreenPayload.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(
+                SpellEditResultPayload.ID,
+                SpellEditResultPayload.CODEC);
         
         ServerPlayNetworking.registerGlobalReceiver(SaveSpellPayload.ID, (payload, context) -> {
             context.server().execute(() -> {
                 ServerPlayer player = context.player();
                 InteractionHand usedHand = payload.hand();
                 ItemStack stack = player.getItemInHand(usedHand);
-                
+                List<List<Point>> currentStrokes = stack.get(STROKES_COMPONENT);
+                if (currentStrokes == null) {
+                    currentStrokes = List.of();
+                }
+
+                SpellEditSessionManager.SaveValidation validation =
+                        EDIT_SESSIONS.validateAndConsume(
+                                player.getUUID(),
+                                usedHand,
+                                payload.revision(),
+                                payload.originalStrokeItemHash(),
+                                stack,
+                                currentStrokes,
+                                player.getInventory().getTimesChanged());
+                if (validation != SpellEditSessionManager.SaveValidation.ACCEPTED) {
+                    LOGGER.warn("Rejected stale spell edit from {}: {}",
+                            player.getName().getString(), validation);
+                    sendEditResult(
+                            player,
+                            payload.revision(),
+                            SpellEditResultPayload.Status.STALE_SESSION,
+                            "This spell paper changed or moved. Reopen it before saving.");
+                    return;
+                }
+
                 if (!stack.is(SPELL_PAPER)) {
                     LOGGER.warn("Player {} is not holding spell paper.", player.getName().getString());
+                    sendEditResult(
+                            player,
+                            payload.revision(),
+                            SpellEditResultPayload.Status.INVALID_ITEM,
+                            "The spell paper is no longer in the selected hand.");
+                    return;
+                }
+
+                try {
+                    BoundedStrokeStreamCodec.immutableValidatedCopy(
+                            payload.strokes(),
+                            DrawingLimits.fromServerConfig());
+                } catch (IllegalArgumentException exception) {
+                    LOGGER.warn("Player {} submitted a drawing outside server limits: {}",
+                            player.getName().getString(), exception.getMessage());
+                    sendEditResult(
+                            player,
+                            payload.revision(),
+                            SpellEditResultPayload.Status.INVALID_DRAWING,
+                            "The drawing exceeds this server's stroke or point limits.");
                     return;
                 }
 
                 if (!hasInkWand(player) && !player.getAbilities().instabuild) {
                     LOGGER.warn("Player {} tried to save a spell without an Ink Wand.",
                             player.getName().getString());
+                    sendEditResult(
+                            player,
+                            payload.revision(),
+                            SpellEditResultPayload.Status.MISSING_WAND,
+                            "You need an Ink Wand to save this drawing.");
                     return;
                 }
 
                 long currentTick = context.server().getTickCount();
-                long lastTick = PARSE_COOLDOWNS.getOrDefault(player.getUUID(), 0L);
-                if (currentTick - lastTick < WhaServerConfig.INSTANCE.network.parseCooldownTicks) {
+                Long lastTick = PARSE_COOLDOWNS.get(player.getUUID());
+                if (lastTick != null
+                        && currentTick - lastTick < WhaServerConfig.INSTANCE.network.parseCooldownTicks) {
                     LOGGER.warn("Player {} is parsing spells too frequently.", player.getName().getString());
+                    sendEditResult(
+                            player,
+                            payload.revision(),
+                            SpellEditResultPayload.Status.RATE_LIMITED,
+                            "Please wait briefly, then reopen the spell paper.");
                     return;
                 }
                 PARSE_COOLDOWNS.put(player.getUUID(), currentTick);
@@ -115,12 +183,59 @@ public class WitchHatMod implements ModInitializer {
                 player.setItemInHand(usedHand, newStack);
                 player.getInventory().setChanged();
                 player.inventoryMenu.broadcastChanges();
+                sendEditResult(
+                        player,
+                        payload.revision(),
+                        SpellEditResultPayload.Status.SAVED,
+                        "Spell drawing saved.");
             });
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(CancelSpellEditPayload.ID, (payload, context) ->
+                context.server().execute(() -> EDIT_SESSIONS.cancel(
+                        context.player().getUUID(),
+                        payload.hand(),
+                        payload.revision(),
+                        payload.originalStrokeItemHash())));
+
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            EDIT_SESSIONS.remove(handler.getPlayer().getUUID());
+            PARSE_COOLDOWNS.remove(handler.getPlayer().getUUID());
         });
 
         SpellDictionary.ensureLoaded();
 
         LOGGER.info("WHA Magic initialized");
+    }
+
+    public static void openSpellEditor(
+            ServerPlayer player,
+            InteractionHand hand,
+            ItemStack stack,
+            List<List<Point>> existingStrokes) {
+        DrawingLimits limits = DrawingLimits.fromServerConfig();
+        SpellEditSessionManager.SessionToken token = EDIT_SESSIONS.open(
+                player.getUUID(),
+                hand,
+                stack,
+                existingStrokes,
+                player.getInventory().getTimesChanged());
+        ServerPlayNetworking.send(player, new OpenSpellScreenPayload(
+                hand,
+                token.revision(),
+                token.originalStrokeItemHash(),
+                limits,
+                existingStrokes));
+    }
+
+    private static void sendEditResult(
+            ServerPlayer player,
+            long revision,
+            SpellEditResultPayload.Status status,
+            String message) {
+        ServerPlayNetworking.send(
+                player,
+                new SpellEditResultPayload(revision, status, message));
     }
 
     private static boolean hasInkWand(ServerPlayer player) {

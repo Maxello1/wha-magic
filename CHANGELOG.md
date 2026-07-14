@@ -2,12 +2,28 @@
 
 ## Unreleased
 
+## [0.3.2-alpha.2] - 2026-07-14
+
+### Added
+
+- Added server-bound spell-paper edit revisions with original item/component hashes.
+- Added explicit Save and Cancel controls with clear stale-session and drawing-limit feedback.
+- Added sortable F5 sample filenames containing validity and recognized symbol labels.
+
 ### Changed
 
+- Synchronized drawing limits from the server when opening the editor.
+- Replaced double-coordinate save packets with bounded compact points and VarInt collection sizes.
+- Added minimum-distance point sampling, cached point totals, debounced previews, and bounded undo/redo history.
 - Reduced temporary allocations in point-cloud and ring matching.
 - Simplified dictionary publication and development sample serialization.
 - Removed unused legacy grouping, layering, and complexity helpers.
 - Standardized project documentation, source formatting rules, and build files.
+
+### Fixed
+
+- Rejected saves when the edited paper moved, changed, was replaced, or no longer matched the active session.
+- Made Cancel close the editor without changing the held spell paper.
 
 ## [0.3.2-alpha.1] - 2026-07-13
 

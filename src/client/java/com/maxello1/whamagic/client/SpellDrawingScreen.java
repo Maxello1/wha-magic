@@ -1,32 +1,48 @@
 package com.maxello1.whamagic.client;
 
+import com.maxello1.whamagic.editor.DrawingEditorState;
+import com.maxello1.whamagic.network.CancelSpellEditPayload;
+import com.maxello1.whamagic.network.DrawingLimits;
+import com.maxello1.whamagic.network.SaveSpellPayload;
+import com.maxello1.whamagic.network.SpellEditResultPayload;
+import com.maxello1.whamagic.parser.Point;
+import com.maxello1.whamagic.parser.SpellDictionary;
+import com.maxello1.whamagic.parser.SpellParser;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
-import com.maxello1.whamagic.parser.Point;
-import com.maxello1.whamagic.parser.SpellDictionary;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public class SpellDrawingScreen extends Screen {
+    private static final double ERASER_RADIUS_NORM = 0.015;
+    private static final double MINIMUM_POINT_DISTANCE = 0.0025;
+    private static final int HISTORY_LIMIT = 64;
+    private static final long PREVIEW_DEBOUNCE_MILLIS = 150;
+
     private final InteractionHand hand;
-    private final List<List<Point>> strokes = new ArrayList<>();
+    private final long revision;
+    private final int originalStrokeItemHash;
+    private final DrawingEditorState editor;
     private List<Point> currentStroke = null;
     private String currentSpellStatus = "";
+    private String editorMessage = "";
+    private int editorMessageColor = 0xFFFF6666;
+    private boolean previewDirty;
+    private long previewDueAt;
+    private boolean savePending;
+    private boolean closingWithoutCancel;
+    private Button saveButton;
     
     private double canvasX, canvasY, canvasSize;
 
-    // Eraser state
     private boolean eraserMode = false;
     private boolean erasing = false;
-    private static final double ERASER_RADIUS_NORM = 0.015;
     private double eraserX = 0, eraserY = 0;
-    
-    // Undo/Redo stack
-    private final List<List<List<Point>>> undoStack = new ArrayList<>();
-    private final List<List<List<Point>>> redoStack = new ArrayList<>();
     
     // Debug overlay: 0=off, 1=basic, 2=verbose
     private int debugMode = 0;
@@ -37,23 +53,39 @@ public class SpellDrawingScreen extends Screen {
     private String sampleFeedback = "";
     private long sampleFeedbackTime = 0;
 
-    public SpellDrawingScreen(InteractionHand hand, List<List<Point>> existingStrokes) {
+    public SpellDrawingScreen(
+            InteractionHand hand,
+            long revision,
+            int originalStrokeItemHash,
+            DrawingLimits limits,
+            List<List<Point>> existingStrokes) {
         super(Component.literal("Draw Spell"));
         this.hand = hand;
-        // Existing strokes are parsed immediately, so templates must be ready first.
+        this.revision = revision;
+        this.originalStrokeItemHash = originalStrokeItemHash;
+        this.editor = new DrawingEditorState(
+                existingStrokes,
+                limits,
+                MINIMUM_POINT_DISTANCE,
+                HISTORY_LIMIT);
         SpellDictionary.ensureLoaded();
-        if (existingStrokes != null) {
-            this.strokes.addAll(existingStrokes);
-            reparse();
-        }
+        reparseNow();
     }
 
     @Override
     protected void init() {
         super.init();
-        this.canvasSize = Math.max(100, Math.min(this.width, this.height) - 40);
+        this.canvasSize = Math.max(100, Math.min(this.width - 20, this.height - 76));
         this.canvasX = (this.width - this.canvasSize) / 2.0;
-        this.canvasY = (this.height - this.canvasSize) / 2.0;
+        this.canvasY = Math.max(40, (this.height - this.canvasSize - 36) / 2.0);
+
+        int buttonY = Math.min(this.height - 26, (int) (canvasY + canvasSize + 8));
+        this.saveButton = addRenderableWidget(Button.builder(
+                Component.literal("Save"),
+                button -> submitSave()).bounds(this.width / 2 - 104, buttonY, 100, 20).build());
+        addRenderableWidget(Button.builder(
+                Component.literal("Cancel"),
+                button -> cancelAndClose()).bounds(this.width / 2 + 4, buttonY, 100, 20).build());
     }
 
     private boolean isInsideCanvas(double mouseX, double mouseY) {
@@ -70,40 +102,17 @@ public class SpellDrawingScreen extends Screen {
         return new Point(p.x * canvasSize + canvasX, p.y * canvasSize + canvasY);
     }
     
-    private void saveState() {
-        List<List<Point>> copy = new ArrayList<>(strokes.size());
-        for (List<Point> stroke : strokes) {
-            copy.add(new ArrayList<>(stroke));
-        }
-        undoStack.add(copy);
-        redoStack.clear();
-    }
-
     private void undo() {
-        if (!undoStack.isEmpty()) {
-            List<List<Point>> copy = new ArrayList<>(strokes.size());
-            for (List<Point> stroke : strokes) {
-                copy.add(new ArrayList<>(stroke));
-            }
-            redoStack.add(copy);
-            
-            strokes.clear();
-            strokes.addAll(undoStack.remove(undoStack.size() - 1));
-            reparse();
+        if (editor.undo()) {
+            currentStroke = null;
+            schedulePreview();
         }
     }
 
     private void redo() {
-        if (!redoStack.isEmpty()) {
-            List<List<Point>> copy = new ArrayList<>(strokes.size());
-            for (List<Point> stroke : strokes) {
-                copy.add(new ArrayList<>(stroke));
-            }
-            undoStack.add(copy);
-            
-            strokes.clear();
-            strokes.addAll(redoStack.remove(redoStack.size() - 1));
-            reparse();
+        if (editor.redo()) {
+            currentStroke = null;
+            schedulePreview();
         }
     }
 
@@ -117,23 +126,30 @@ public class SpellDrawingScreen extends Screen {
 
         if (event.button() == 0) {
             if (eraserMode) {
-                saveState();
+                editor.saveState();
                 erasing = true;
                 eraseAtPosition(event.x(), event.y());
                 return true;
-            } else if (isInsideCanvas(event.x(), event.y()) && strokes.size() < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxStrokes) {
-                saveState();
+            } else if (isInsideCanvas(event.x(), event.y())) {
+                if (!editor.canStartStroke()) {
+                    showLimitError(editor.strokeCount() >= editor.limits().maxStrokes()
+                            ? "Stroke limit reached (" + editor.limits().maxStrokes() + ")."
+                            : "Total point limit reached (" + editor.limits().maxTotalPoints() + ").");
+                    return true;
+                }
                 currentStroke = new ArrayList<>();
                 currentStroke.add(toNormalized(event.x(), event.y()));
+                clearEditorMessage();
                 return true;
             }
         }
-        // Right-click to clear all
         if (event.button() == 1) {
-            saveState();
-            strokes.clear();
+            if (editor.strokeCount() > 0) {
+                editor.saveState();
+                editor.clear();
+            }
             currentStroke = null;
-            reparse();
+            schedulePreview();
             return true;
         }
         return super.mouseClicked(event, doubleClick);
@@ -146,10 +162,8 @@ public class SpellDrawingScreen extends Screen {
                 eraseAtPosition(event.x(), event.y());
                 return true;
             } else if (currentStroke != null) {
-                int totalPoints = currentStroke.size();
-                for (List<Point> s : strokes) totalPoints += s.size();
-                if (isInsideCanvas(event.x(), event.y()) && currentStroke.size() < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxPointsPerStroke && totalPoints < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxTotalPoints) {
-                    currentStroke.add(toNormalized(event.x(), event.y()));
+                if (isInsideCanvas(event.x(), event.y())) {
+                    appendCurrentPoint(toNormalized(event.x(), event.y()));
                 }
                 return true;
             }
@@ -162,23 +176,43 @@ public class SpellDrawingScreen extends Screen {
         if (event.button() == 0) {
             if (eraserMode && erasing) {
                 erasing = false;
-                reparse();
+                schedulePreview();
                 return true;
             } else if (currentStroke != null) {
-                int totalPoints = currentStroke.size();
-                for (List<Point> s : strokes) totalPoints += s.size();
-                if (isInsideCanvas(event.x(), event.y()) && currentStroke.size() < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxPointsPerStroke && totalPoints < com.maxello1.whamagic.config.WhaServerConfig.INSTANCE.network.maxTotalPoints) {
-                    currentStroke.add(toNormalized(event.x(), event.y()));
+                if (isInsideCanvas(event.x(), event.y())) {
+                    appendCurrentPoint(toNormalized(event.x(), event.y()));
                 }
                 if (currentStroke.size() >= 2) {
-                    strokes.add(new ArrayList<>(currentStroke));
+                    editor.saveState();
+                    editor.addStroke(currentStroke);
                 }
                 currentStroke = null;
-                reparse();
+                schedulePreview();
                 return true;
             }
         }
         return super.mouseReleased(event);
+    }
+
+    private void appendCurrentPoint(Point point) {
+        Point previous = currentStroke.isEmpty()
+                ? null
+                : currentStroke.get(currentStroke.size() - 1);
+        DrawingEditorState.PointAdmission admission = editor.admissionFor(
+                previous,
+                point,
+                currentStroke.size());
+        switch (admission) {
+            case ACCEPTED -> currentStroke.add(point);
+            case STROKE_LIMIT -> showLimitError(
+                    "Point limit reached for this stroke ("
+                            + editor.limits().maxPointsPerStroke() + ").");
+            case TOTAL_LIMIT -> showLimitError(
+                    "Total point limit reached (" + editor.limits().maxTotalPoints() + ").");
+            case TOO_CLOSE -> {
+                // Mouse events closer than the sampling distance do not add useful geometry.
+            }
+        }
     }
 
     @Override
@@ -193,8 +227,11 @@ public class SpellDrawingScreen extends Screen {
             return true;
         }
         if (event.key() == GLFW.GLFW_KEY_F5) {
-            // Save sample
-            String path = com.maxello1.whamagic.dev.SampleRecorder.saveSample(strokes, lastParseResult, null);
+            flushPreview();
+            String path = com.maxello1.whamagic.dev.SampleRecorder.saveSample(
+                    editor.strokes(),
+                    lastParseResult,
+                    null);
             if (path != null) {
                 sampleFeedback = "Sample saved: " + path;
             } else {
@@ -228,7 +265,7 @@ public class SpellDrawingScreen extends Screen {
         double rSq = ERASER_RADIUS_NORM * ERASER_RADIUS_NORM;
         List<List<Point>> newStrokes = new ArrayList<>();
 
-        for (List<Point> stroke : strokes) {
+        for (List<Point> stroke : editor.strokes()) {
             List<Point> segment = new ArrayList<>();
             for (Point p : stroke) {
                 double dx = p.x - normMouse.x;
@@ -247,18 +284,42 @@ public class SpellDrawingScreen extends Screen {
             }
         }
 
-        strokes.clear();
-        strokes.addAll(newStrokes);
+        if (newStrokes.size() > editor.limits().maxStrokes()) {
+            showLimitError("Erasing would exceed the stroke limit ("
+                    + editor.limits().maxStrokes() + ").");
+            return;
+        }
+        editor.replaceStrokes(newStrokes);
     }
 
-    private void reparse() {
-        if (strokes.isEmpty()) {
+    private void schedulePreview() {
+        if (editor.strokeCount() == 0) {
+            currentSpellStatus = "Cleared";
+            parserDebugInfo = "";
+            lastParseResult = null;
+            previewDirty = false;
+            return;
+        }
+        previewDirty = true;
+        previewDueAt = System.currentTimeMillis() + PREVIEW_DEBOUNCE_MILLIS;
+        currentSpellStatus = "Updating preview...";
+    }
+
+    private void flushPreview() {
+        if (previewDirty) {
+            reparseNow();
+        }
+    }
+
+    private void reparseNow() {
+        previewDirty = false;
+        if (editor.strokeCount() == 0) {
             currentSpellStatus = "Cleared";
             parserDebugInfo = "";
             lastParseResult = null;
             return;
         }
-        lastParseResult = com.maxello1.whamagic.parser.SpellParser.parse(strokes);
+        lastParseResult = SpellParser.parse(editor.strokes());
         currentSpellStatus = lastParseResult.ir.statusMessage();
         if (lastParseResult.isValidSpell()) {
             parserDebugInfo = "Valid: " + lastParseResult.ir.displayName();
@@ -268,10 +329,85 @@ public class SpellDrawingScreen extends Screen {
     }
 
     @Override
+    public void tick() {
+        super.tick();
+        if (previewDirty && System.currentTimeMillis() >= previewDueAt) {
+            reparseNow();
+        }
+    }
+
+    private void submitSave() {
+        if (savePending) {
+            return;
+        }
+        if (currentStroke != null) {
+            showLimitError("Finish the current stroke before saving.");
+            return;
+        }
+        savePending = true;
+        saveButton.active = false;
+        editorMessage = "Saving...";
+        editorMessageColor = 0xFFFFFF55;
+        ClientPlayNetworking.send(new SaveSpellPayload(
+                hand,
+                revision,
+                originalStrokeItemHash,
+                editor.strokes()));
+    }
+
+    void handleEditResult(SpellEditResultPayload payload) {
+        if (payload.revision() != revision) {
+            return;
+        }
+        if (payload.accepted()) {
+            closingWithoutCancel = true;
+            if (minecraft != null) {
+                minecraft.setScreenAndShow(null);
+            }
+            return;
+        }
+        savePending = false;
+        if (saveButton != null) {
+            saveButton.active = false;
+            saveButton.setMessage(Component.literal("Reopen required"));
+        }
+        editorMessage = payload.message();
+        editorMessageColor = 0xFFFF5555;
+    }
+
+    private void cancelAndClose() {
+        if (!closingWithoutCancel) {
+            closingWithoutCancel = true;
+            ClientPlayNetworking.send(new CancelSpellEditPayload(
+                    hand,
+                    revision,
+                    originalStrokeItemHash));
+        }
+        if (minecraft != null) {
+            minecraft.setScreenAndShow(null);
+        }
+    }
+
+    @Override
     public void onClose() {
-        net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(
-                new com.maxello1.whamagic.network.SaveSpellPayload(hand, strokes));
-        super.onClose();
+        cancelAndClose();
+    }
+
+    @Override
+    public void removed() {
+        ClientUtils.clearSpellScreen(this);
+        super.removed();
+    }
+
+    private void showLimitError(String message) {
+        editorMessage = message;
+        editorMessageColor = 0xFFFF5555;
+    }
+
+    private void clearEditorMessage() {
+        if (!savePending) {
+            editorMessage = "";
+        }
     }
 
     @Override
@@ -285,7 +421,7 @@ public class SpellDrawingScreen extends Screen {
         graphics.fill((int)(canvasX + canvasSize) - 1, (int)canvasY, (int)(canvasX + canvasSize), (int)(canvasY + canvasSize), 0x88FFFFFF);
 
         // Draw saved strokes
-        for (List<Point> stroke : strokes) {
+        for (List<Point> stroke : editor.strokes()) {
             drawStroke(graphics, stroke, 0xFFFFFFFF);
         }
 
@@ -296,9 +432,21 @@ public class SpellDrawingScreen extends Screen {
 
         // Status text
         graphics.text(this.font, currentSpellStatus, 10, 10, 0xFF00FF00);
-        String modeText = eraserMode ? "ERASER MODE (E to toggle)" : "Right-click to clear | ESC to save & close";
+        String modeText = eraserMode
+                ? "ERASER MODE (E to toggle)"
+                : "Right-click to clear | ESC cancels without saving";
         graphics.text(this.font, modeText, 10, 22, eraserMode ? 0xFFFF8844 : 0xFFAAAAAA);
-        graphics.text(this.font, "Strokes: " + strokes.size() + " | Middle-click or E: toggle eraser | Z/Y: Undo/Redo", 10, 34, 0xFFAAAAAA);
+        int displayedPointCount = editor.totalPointCount()
+                + (currentStroke == null ? 0 : currentStroke.size());
+        graphics.text(this.font, String.format(
+                        "Strokes: %d/%d | Points: %d/%d | Per stroke: %d",
+                        editor.strokeCount(), editor.limits().maxStrokes(),
+                        displayedPointCount, editor.limits().maxTotalPoints(),
+                        editor.limits().maxPointsPerStroke()),
+                10, 34, 0xFFAAAAAA);
+        if (!editorMessage.isEmpty()) {
+            graphics.text(this.font, editorMessage, 10, 46, editorMessageColor);
+        }
         
         // Sample recording feedback (shown for 3 seconds)
         if (!sampleFeedback.isEmpty() && System.currentTimeMillis() - sampleFeedbackTime < 3000) {
@@ -328,9 +476,9 @@ public class SpellDrawingScreen extends Screen {
     
     private void renderDebugOverlay(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         String modeName = debugMode == 1 ? "Basic" : "Verbose";
-        graphics.text(this.font, "Debug [" + modeName + "]: " + parserDebugInfo, 10, 46, 0xFFFFFF00);
-        graphics.text(this.font, String.format("Mouse Norm: %.3f, %.3f", toNormalized(mouseX, mouseY).x, toNormalized(mouseX, mouseY).y), 10, 58, 0xFFFFFF00);
-        graphics.text(this.font, "F3: cycle debug | F5: save sample", 10, 70, 0xFF888888);
+        graphics.text(this.font, "Debug [" + modeName + "]: " + parserDebugInfo, 10, 58, 0xFFFFFF00);
+        graphics.text(this.font, String.format("Mouse Norm: %.3f, %.3f", toNormalized(mouseX, mouseY).x, toNormalized(mouseX, mouseY).y), 10, 70, 0xFFFFFF00);
+        graphics.text(this.font, "F3: cycle debug | F5: save sample", 10, 82, 0xFF888888);
         
         if (lastParseResult == null || lastParseResult.debugResult == null) return;
         
@@ -355,7 +503,7 @@ public class SpellDrawingScreen extends Screen {
                 debug.candidateCount(), debug.selectedCandidateCount(),
                 debug.recognitionCalls(), unknownCount,
                 limitStatus),
-                10, 82, 0xFFFFFF00);
+                10, 94, 0xFFFFFF00);
         
         // === VERBOSE: Primitive group boxes (blue) ===
         if (debugMode >= 2 && debug.primitiveGroups() != null) {
@@ -463,7 +611,7 @@ public class SpellDrawingScreen extends Screen {
         
         // === VERBOSE: Evaluated candidate details ===
         if (debugMode >= 2 && debug.allEvaluated() != null) {
-            int infoY = 94;
+            int infoY = 106;
             graphics.text(this.font, "Prim groups: " + debug.primitiveGroupCount(), 10, infoY, 0xFF88CCFF);
             infoY += 10;
             graphics.text(this.font, String.format("Ring work: %d combos / %d fits / %.3f ms | strokes=%s",

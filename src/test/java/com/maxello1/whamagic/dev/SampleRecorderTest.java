@@ -40,7 +40,9 @@ class SampleRecorderTest {
         Path sample = SampleRecorder.writeSample(
                 temporaryDirectory, strokes, null, notes, recordedAt);
 
-        assertEquals("sample_2026-07-13_04-50-32-641.json", sample.getFileName().toString());
+        assertEquals(
+                "sample_2026-07-13_04-50-32-641_unparsed.json",
+                sample.getFileName().toString());
         JsonObject json;
         try (Reader reader = Files.newBufferedReader(sample, StandardCharsets.UTF_8)) {
             json = JsonParser.parseReader(reader).getAsJsonObject();
@@ -50,6 +52,7 @@ class SampleRecorderTest {
         assertEquals("2026-07-13", json.get("sourceDate").getAsString());
         assertEquals(recordedAt.toString(), json.get("timestamp").getAsString());
         assertFalse(json.has("result"));
+        assertFalse(json.has("simplifiedStrokes"));
 
         JsonArray recordedStrokes = json.getAsJsonArray("rawStrokes");
         assertEquals(strokes.size(), recordedStrokes.size());
@@ -64,6 +67,18 @@ class SampleRecorderTest {
                 assertEquals(expectedPoint.y, recordedPoint.get("y").getAsDouble());
             }
         }
+    }
+
+    @Test
+    void namesParsedLayoutsByValidityAndRecognizedContent() {
+        SpellParser.ParseResult result = SpellParser.parse(List.of(List.of(
+                new Point(0.10, 0.10),
+                new Point(0.12, 0.12))));
+
+        String label = SampleRecorder.layoutLabel(result);
+
+        assertTrue(label.startsWith(result.isValidSpell() ? "valid_" : "invalid_"));
+        assertFalse(label.contains(" "));
     }
 
     @Test

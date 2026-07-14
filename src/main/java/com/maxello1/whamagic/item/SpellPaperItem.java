@@ -4,10 +4,8 @@ import com.maxello1.whamagic.WitchHatMod;
 import com.maxello1.whamagic.magic.SpellExecutionService;
 import com.maxello1.whamagic.magic.SpellState;
 import com.maxello1.whamagic.magic.StoredSpell;
-import com.maxello1.whamagic.network.OpenSpellScreenPayload;
 import com.maxello1.whamagic.parser.Point;
 import com.maxello1.whamagic.parser.SpellParser;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
@@ -49,9 +47,11 @@ public class SpellPaperItem extends Item {
         if (!level.isClientSide()) {
             if (hasInkWand(player) || player.getAbilities().instabuild) {
                 List<List<Point>> existingStrokes = strokes == null ? new ArrayList<>() : strokes;
-                ServerPlayNetworking.send(
+                WitchHatMod.openSpellEditor(
                         (ServerPlayer) player,
-                        new OpenSpellScreenPayload(hand, existingStrokes));
+                        hand,
+                        stack,
+                        existingStrokes);
             } else {
                 player.sendSystemMessage(Component.literal("§cYou need an Ink Wand to draw spells."));
             }

@@ -3,7 +3,9 @@
 F5 recordings are written to `run/dev-samples` with `sampleRole` set to
 `experimental`. They retain unrounded `rawStrokes` plus the recognizer version,
 dictionary version/hash, source date, empty expected intent, notes, and whether
-the sample influenced a template or threshold.
+the sample influenced a template or threshold. Filenames begin with the sortable
+recording timestamp and end with the current validity and recognized symbol
+summary, such as `sample_2026-07-14_04-15-30-120_valid_earth_levitation-x2.json`.
 
 Preview and promote a recording with:
 
