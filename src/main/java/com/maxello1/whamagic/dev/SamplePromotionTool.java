@@ -7,6 +7,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.maxello1.whamagic.parser.Point;
+import com.maxello1.whamagic.parser.ParseDetail;
 import com.maxello1.whamagic.parser.PointCloudRecognizer;
 import com.maxello1.whamagic.parser.SpellDictionary;
 import com.maxello1.whamagic.parser.SpellParser;
@@ -110,7 +111,7 @@ public final class SamplePromotionTool {
         RecordedSample sample = readRecordedSample(recordedSample);
         SpellDictionary.DictionarySnapshot dictionary = SpellDictionary.snapshot();
         return new Preview(
-                sample.points(), SpellParser.parse(sample.points()),
+                sample.points(), SpellParser.parse(sample.points(), ParseDetail.FULL_DIAGNOSTICS),
                 PointCloudRecognizer.RECOGNIZER_VERSION,
                 dictionary.version(), dictionary.hash(), sample.sourceDate());
     }

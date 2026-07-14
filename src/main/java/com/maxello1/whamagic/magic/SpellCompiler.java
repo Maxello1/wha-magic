@@ -67,7 +67,7 @@ public final class SpellCompiler {
             if (primarySemantic == null && sigil.semantic() != null) {
                 primarySemantic = sigil.semantic();
             }
-            displayNames.add(sigil.alternatives().isEmpty() ? sigil.id().getPath() : sigil.alternatives().get(0).displayName());
+            displayNames.add(sigil.displayName());
         }
         
         boolean isClosed = ast.ring().isClosed();

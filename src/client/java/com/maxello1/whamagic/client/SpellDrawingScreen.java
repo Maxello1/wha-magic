@@ -6,6 +6,7 @@ import com.maxello1.whamagic.network.DrawingLimits;
 import com.maxello1.whamagic.network.SaveSpellPayload;
 import com.maxello1.whamagic.network.SpellEditResultPayload;
 import com.maxello1.whamagic.parser.Point;
+import com.maxello1.whamagic.parser.ParseDetail;
 import com.maxello1.whamagic.parser.SpellDictionary;
 import com.maxello1.whamagic.parser.SpellParser;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -48,6 +49,7 @@ public class SpellDrawingScreen extends Screen {
     private int debugMode = 0;
     private String parserDebugInfo = "";
     private com.maxello1.whamagic.parser.SpellParser.ParseResult lastParseResult = null;
+    private com.maxello1.whamagic.parser.SpellParser.ParseResult fullDiagnosticsResult = null;
     
     // Sample recording feedback
     private String sampleFeedback = "";
@@ -224,6 +226,9 @@ public class SpellDrawingScreen extends Screen {
         if (event.key() == GLFW.GLFW_KEY_F3) {
             // Cycle: Off(0) -> Basic(1) -> Verbose(2) -> Off(0)
             debugMode = (debugMode + 1) % 3;
+            if (debugMode > 0) {
+                ensureFullDiagnostics();
+            }
             return true;
         }
         if (event.key() == GLFW.GLFW_KEY_F5) {
@@ -231,12 +236,12 @@ public class SpellDrawingScreen extends Screen {
                 showLimitError("Wait for the spell save to finish before recording a sample.");
                 return true;
             }
-            flushPreview();
+            SpellParser.ParseResult diagnostics = ensureFullDiagnostics();
             if (minecraft != null) {
                 minecraft.setScreenAndShow(new SaveRecognitionSampleScreen(
                         this,
                         new com.maxello1.whamagic.dev.RecognitionSampleCapture(
-                                editor.strokes(), lastParseResult)));
+                                editor.strokes(), diagnostics)));
             }
             return true;
         }
@@ -293,6 +298,7 @@ public class SpellDrawingScreen extends Screen {
     }
 
     private void schedulePreview() {
+        fullDiagnosticsResult = null;
         if (editor.strokeCount() == 0) {
             currentSpellStatus = "Cleared";
             parserDebugInfo = "";
@@ -305,12 +311,6 @@ public class SpellDrawingScreen extends Screen {
         currentSpellStatus = "Updating preview...";
     }
 
-    private void flushPreview() {
-        if (previewDirty) {
-            reparseNow();
-        }
-    }
-
     private void reparseNow() {
         previewDirty = false;
         if (editor.strokeCount() == 0) {
@@ -319,10 +319,36 @@ public class SpellDrawingScreen extends Screen {
             lastParseResult = null;
             return;
         }
-        lastParseResult = SpellParser.parse(editor.strokes());
-        currentSpellStatus = lastParseResult.ir.statusMessage();
-        if (lastParseResult.isValidSpell()) {
-            parserDebugInfo = "Valid: " + lastParseResult.ir.displayName();
+        ParseDetail detail = debugMode > 0
+                ? ParseDetail.FULL_DIAGNOSTICS
+                : ParseDetail.PREVIEW;
+        lastParseResult = SpellParser.parse(editor.strokes(), detail);
+        if (detail == ParseDetail.FULL_DIAGNOSTICS) {
+            fullDiagnosticsResult = lastParseResult;
+        }
+        updateParseStatus(lastParseResult);
+    }
+
+    private SpellParser.ParseResult ensureFullDiagnostics() {
+        if (fullDiagnosticsResult == null) {
+            previewDirty = false;
+            fullDiagnosticsResult = SpellParser.parse(
+                    editor.strokes(), ParseDetail.FULL_DIAGNOSTICS);
+        }
+        lastParseResult = fullDiagnosticsResult;
+        updateParseStatus(lastParseResult);
+        return fullDiagnosticsResult;
+    }
+
+    private void updateParseStatus(SpellParser.ParseResult result) {
+        if (result == null) {
+            currentSpellStatus = "Cleared";
+            parserDebugInfo = "";
+            return;
+        }
+        currentSpellStatus = result.ir.statusMessage();
+        if (result.isValidSpell()) {
+            parserDebugInfo = "Valid: " + result.ir.displayName();
         } else {
             parserDebugInfo = "Invalid or Incomplete";
         }

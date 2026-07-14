@@ -164,7 +164,7 @@ public class PointCloudRecognizer implements SymbolRecognizer {
 
     @Override
     public SymbolRecognitionResult recognize(List<List<Point>> strokes, SymbolKind expectedKind) {
-        return recognizeStatic(strokes, expectedKind);
+        return recognizeStatic(strokes, expectedKind, ParseDetail.FULL_DIAGNOSTICS);
     }
 
     static PointCloudTemplate buildTemplate(DictionaryTemplate definition) {
@@ -200,6 +200,13 @@ public class PointCloudRecognizer implements SymbolRecognizer {
      */
     public static SymbolRecognitionResult recognizeStatic(List<List<Point>> strokes,
                                                                 SymbolKind expectedKind) {
+        return recognizeStatic(strokes, expectedKind, ParseDetail.FULL_DIAGNOSTICS);
+    }
+
+    static SymbolRecognitionResult recognizeStatic(
+            List<List<Point>> strokes,
+            SymbolKind expectedKind,
+            ParseDetail detail) {
         if (strokes == null || strokes.isEmpty()) {
             return SymbolRecognitionResult.rejected("Unknown",
                     RecognitionRejectionReason.NO_STROKES,
@@ -291,7 +298,9 @@ public class PointCloudRecognizer implements SymbolRecognizer {
 
         // Alternatives expose each semantic symbol only once, using its best visual variant.
         List<RecognitionAlternative> alternatives = new ArrayList<>();
-        int altCount = Math.min(5, semanticScores.size());
+        int altCount = detail.retainsAlternatives()
+                ? Math.min(5, semanticScores.size())
+                : 0;
         for (int i = 0; i < altCount; i++) {
             TemplateScore ts = semanticScores.get(i);
             alternatives.add(new RecognitionAlternative(

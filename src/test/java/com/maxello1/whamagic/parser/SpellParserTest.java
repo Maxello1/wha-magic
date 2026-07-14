@@ -357,10 +357,10 @@ public class SpellParserTest {
     @Test
     public void recognizedModelsRejectNullIdentityAndSemantic() {
         assertThrows(NullPointerException.class, () -> new RecognizedSigil(
-                null, "earth", null, SigilSemantic.empty(), 1.0, null, null, 0,
+                null, "earth", "Earth", null, SigilSemantic.empty(), 1.0, null, null, 0,
                 List.of(), List.of(), null));
         assertThrows(NullPointerException.class, () -> new RecognizedSigil(
-                Identifier.tryParse("wha-magic:earth"), "earth", null, null, 1.0, null, null, 0,
+                Identifier.tryParse("wha-magic:earth"), "earth", "Earth", null, null, 1.0, null, null, 0,
                 List.of(), List.of(), null));
         assertThrows(NullPointerException.class, () -> new RecognizedSign(
                 0, null, "column", 1.0, 0, 0, "sign", SignSemantic.empty(),

@@ -6,6 +6,7 @@ import com.maxello1.whamagic.magic.SpellState;
 import com.maxello1.whamagic.magic.StoredSpell;
 import com.maxello1.whamagic.magic.StoredSpellResolver;
 import com.maxello1.whamagic.parser.Point;
+import com.maxello1.whamagic.parser.ParseDetail;
 import com.maxello1.whamagic.parser.SpellParser;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -36,7 +37,7 @@ public class SpellPaperItem extends Item {
             StoredSpellResolver.Resolution resolution = StoredSpellResolver.resolve(
                     stack.get(WitchHatMod.STORED_SPELL_COMPONENT),
                     strokes,
-                    SpellParser::parse);
+                    source -> SpellParser.parse(source, ParseDetail.RUNTIME));
             if (resolution.reparsed()) {
                 if (resolution.refreshedSpell() != null) {
                     stack.set(WitchHatMod.STORED_SPELL_COMPONENT, resolution.refreshedSpell());

@@ -1,6 +1,7 @@
 package com.maxello1.whamagic.dev;
 
 import com.maxello1.whamagic.parser.Point;
+import com.maxello1.whamagic.parser.ParseDetail;
 import com.maxello1.whamagic.parser.SpellParser;
 
 import java.io.IOException;
@@ -20,6 +21,10 @@ public final class RecognitionSampleCapture {
         this.rawStrokes = rawStrokes == null
                 ? List.of()
                 : rawStrokes.stream().map(List::copyOf).toList();
+        if (actualResult != null && actualResult.detail != ParseDetail.FULL_DIAGNOSTICS) {
+            throw new IllegalArgumentException(
+                    "Recognition sample capture requires full parser diagnostics");
+        }
         this.actualResult = actualResult;
     }
 

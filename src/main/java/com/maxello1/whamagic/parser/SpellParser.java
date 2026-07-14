@@ -20,17 +20,28 @@ public final class SpellParser {
     public static final class ParseResult {
         public final GlyphAst ast;
         public final SpellIr ir;
+        public final ParseDetail detail;
+        public final ParseSummary summary;
         public final SegmentationDebugResult debugResult;
         
         public ParseResult(GlyphAst ast, SpellIr ir) {
-            this.ast = ast;
-            this.ir = ir;
-            this.debugResult = null;
+            this(ast, ir, ParseDetail.FULL_DIAGNOSTICS, null, null);
         }
 
         public ParseResult(GlyphAst ast, SpellIr ir, SegmentationDebugResult debugResult) {
+            this(ast, ir, ParseDetail.FULL_DIAGNOSTICS, null, debugResult);
+        }
+
+        public ParseResult(
+                GlyphAst ast,
+                SpellIr ir,
+                ParseDetail detail,
+                ParseSummary summary,
+                SegmentationDebugResult debugResult) {
             this.ast = ast;
             this.ir = ir;
+            this.detail = detail;
+            this.summary = summary;
             this.debugResult = debugResult;
         }
 
@@ -40,14 +51,34 @@ public final class SpellParser {
     }
 
     public static ParseResult parse(List<List<Point>> strokes) {
-        return parse(strokes, CandidateGenerationSettings.DEFAULTS);
+        return parse(
+                strokes,
+                CandidateGenerationSettings.DEFAULTS,
+                ParseDetail.FULL_DIAGNOSTICS);
+    }
+
+    public static ParseResult parse(List<List<Point>> strokes, ParseDetail detail) {
+        return parse(strokes, CandidateGenerationSettings.DEFAULTS, detail);
     }
 
     /** Parse with explicit candidate and recognition limits, primarily for deterministic tests. */
     public static ParseResult parse(List<List<Point>> strokes, CandidateGenerationSettings settings) {
+        return parse(strokes, settings, ParseDetail.FULL_DIAGNOSTICS);
+    }
+
+    /** Parse with explicit bounded settings and result-detail policy. */
+    public static ParseResult parse(
+            List<List<Point>> strokes,
+            CandidateGenerationSettings settings,
+            ParseDetail detail) {
         if (strokes == null || strokes.isEmpty()) {
             GlyphAst emptyAst = new GlyphAst(null, List.of(), List.of(), List.of());
-            return new ParseResult(emptyAst, SpellCompiler.compile(emptyAst));
+            return new ParseResult(
+                    emptyAst,
+                    SpellCompiler.compile(emptyAst),
+                    detail,
+                    detail == ParseDetail.RUNTIME ? null : ParseSummary.EMPTY,
+                    null);
         }
 
         RingDetector.RingSearchResult ringSearch = RingDetector.searchRing(strokes);
@@ -66,7 +97,7 @@ public final class SpellParser {
                 CandidateGenerator.generateCandidates(nonRingStrokes, ring, settings);
 
         SelectionEngine.SelectedSymbols selection = SelectionEngine.select(
-                genResult.candidates(), ring, settings.maxRecognitionCalls());
+                genResult.candidates(), ring, settings.maxRecognitionCalls(), detail);
 
         // Anything not owned by a selected symbol/unknown remains visible as dropped
         // input. Ring strokes are intentionally excluded, and ring-prefiltered strokes
@@ -83,29 +114,6 @@ public final class SpellParser {
                 ? List.of()
                 : ringDetection.ringStrokeIndices().stream().sorted().toList();
 
-        SegmentationDebugResult debugResult = new SegmentationDebugResult(
-            genResult.primitiveGroups(),
-            genResult.candidates(),
-            selection.selectedCandidates(),
-            selection.recognitionCalls(),
-            genResult.candidateLimitReached(),
-            ringDiagnostics.budgetExhausted(),
-            selection.recognitionBudgetExhausted(),
-            List.copyOf(droppedSourceStrokeIndices),
-            selection.unevaluatedCandidateCount(),
-            ringDiagnostics.combinationsConsidered(),
-            ringDiagnostics.fitsAttempted(),
-            ringDiagnostics.elapsedNanos(),
-            ringStrokeIndices,
-            selection.sigils(),
-            selection.signs(),
-            selection.unknowns(),
-            genResult.primitiveGroups().size(),
-            genResult.candidates().size(),
-            selection.selectedCandidates().size(),
-            selection.allEvaluated()
-        );
-        
         boolean recognitionComplete = !ringDiagnostics.budgetExhausted()
                 && !genResult.candidateLimitReached()
                 && !selection.recognitionBudgetExhausted();
@@ -138,6 +146,46 @@ public final class SpellParser {
                 ring, selection.sigils(), selection.signs(), selection.unknowns(), unknownInk);
         SpellIr ir = SpellCompiler.compile(ast, recognitionComplete);
 
-        return new ParseResult(ast, ir, debugResult);
+        ParseSummary summary = detail == ParseDetail.RUNTIME
+                ? null
+                : new ParseSummary(
+                        genResult.primitiveGroups().size(),
+                        genResult.candidates().size(),
+                        selection.sigils().size() + selection.signs().size()
+                                + selection.unknowns().size(),
+                        selection.recognitionCalls(),
+                        selection.unknowns().size(),
+                        genResult.candidateLimitReached(),
+                        ringDiagnostics.budgetExhausted(),
+                        selection.recognitionBudgetExhausted(),
+                        selection.unevaluatedCandidateCount(),
+                        droppedSourceStrokeIndices.size());
+
+        SegmentationDebugResult debugResult = null;
+        if (detail.retainsFullDiagnostics()) {
+            debugResult = new SegmentationDebugResult(
+                    genResult.primitiveGroups(),
+                    genResult.candidates(),
+                    selection.selectedCandidates(),
+                    selection.recognitionCalls(),
+                    genResult.candidateLimitReached(),
+                    ringDiagnostics.budgetExhausted(),
+                    selection.recognitionBudgetExhausted(),
+                    List.copyOf(droppedSourceStrokeIndices),
+                    selection.unevaluatedCandidateCount(),
+                    ringDiagnostics.combinationsConsidered(),
+                    ringDiagnostics.fitsAttempted(),
+                    ringDiagnostics.elapsedNanos(),
+                    ringStrokeIndices,
+                    selection.sigils(),
+                    selection.signs(),
+                    selection.unknowns(),
+                    genResult.primitiveGroups().size(),
+                    genResult.candidates().size(),
+                    selection.selectedCandidates().size(),
+                    selection.allEvaluated());
+        }
+
+        return new ParseResult(ast, ir, detail, summary, debugResult);
     }
 }

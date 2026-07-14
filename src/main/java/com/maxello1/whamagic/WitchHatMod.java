@@ -13,6 +13,7 @@ import com.maxello1.whamagic.network.SaveSpellPayload;
 import com.maxello1.whamagic.network.SpellEditResultPayload;
 import com.maxello1.whamagic.network.SpellEditSessionManager;
 import com.maxello1.whamagic.parser.Point;
+import com.maxello1.whamagic.parser.ParseDetail;
 import com.maxello1.whamagic.parser.SpellDictionary;
 import com.maxello1.whamagic.parser.SpellParser;
 import net.fabricmc.api.ModInitializer;
@@ -177,7 +178,8 @@ public class WitchHatMod implements ModInitializer {
 
                 LOGGER.debug("Parsing submitted spell for {}", player.getName().getString());
                 
-                SpellParser.ParseResult result = SpellParser.parse(payload.strokes());
+                SpellParser.ParseResult result = SpellParser.parse(
+                        payload.strokes(), ParseDetail.RUNTIME);
                 ItemStack newStack = stack.copy();
                 applyParseResultToStack(newStack, result, payload.strokes());
                 player.setItemInHand(usedHand, newStack);

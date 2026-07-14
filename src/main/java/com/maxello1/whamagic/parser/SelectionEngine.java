@@ -45,6 +45,14 @@ public class SelectionEngine {
     ) {}
     
     public static SelectedSymbols select(List<SymbolCandidate> candidates, RingDetector.RingGlyph ring, int maxCalls) {
+        return select(candidates, ring, maxCalls, ParseDetail.FULL_DIAGNOSTICS);
+    }
+
+    public static SelectedSymbols select(
+            List<SymbolCandidate> candidates,
+            RingDetector.RingGlyph ring,
+            int maxCalls,
+            ParseDetail detail) {
         int calls = 0;
         boolean recognitionBudgetExhausted = false;
         int unevaluatedCandidateCount = 0;
@@ -87,7 +95,8 @@ public class SelectionEngine {
             double sigilRoleScore = 0;
             
             if (likelySigil) {
-                sigilRes = PointCloudRecognizer.INSTANCE.recognize(cand.strokes(), SymbolKind.SIGIL);
+                sigilRes = PointCloudRecognizer.recognizeStatic(
+                        cand.strokes(), SymbolKind.SIGIL, detail);
                 calls++;
                 sigilScore = sigilRes.score();
                 double centralityScore = 1.0 - clamp(cand.radialPosition() / 0.70);
@@ -109,7 +118,8 @@ public class SelectionEngine {
                     if (angleToTest < 0) angleToTest += 360;
                     
                     List<List<Point>> rotatedStrokes = rotateStrokes(cand.strokes(), cand.centroid(), angleToTest);
-                    SymbolRecognitionResult res = PointCloudRecognizer.INSTANCE.recognize(rotatedStrokes, SymbolKind.SIGN);
+                    SymbolRecognitionResult res = PointCloudRecognizer.recognizeStatic(
+                            rotatedStrokes, SymbolKind.SIGN, detail);
                     calls++;
                     
                     if (bestSignRes == null || res.score() > bestSignScore) {
@@ -283,17 +293,17 @@ public class SelectionEngine {
                     selectedCandidates.add(eval.cand);
                     usedStrokes.addAll(eval.cand.sourceStrokeIndices());
                     
-                    // Build alternatives with role scores populated
-                    double roleScore = selectedAsSigil ? eval.sigilRoleScore : eval.signRoleScore;
-                    List<RecognitionAlternative> alts = buildAlternatives(res, roleScore, eval.bestAngle);
-                    
                     if (selectedAsSigil) {
                         ElementType el = null;
                         try { if (res.element() != null) el = ElementType.valueOf(res.element().toUpperCase()); } catch (Exception ignored) {}
+                        List<RecognitionAlternative> alternatives = detail.retainsAlternatives()
+                                ? buildAlternatives(res, eval.sigilRoleScore, eval.bestAngle)
+                                : List.of();
                         
                         outSigils.add(new RecognizedSigil(
                             Identifier.tryParse(res.id()),
                             res.matchedTemplateId(),
+                            res.displayName(),
                             el,
                             res.sigilSemantic(),
                             res.score(),
@@ -301,7 +311,7 @@ public class SelectionEngine {
                             eval.cand.bounds(),
                             0,
                             eval.cand.sourceStrokeIndices(),
-                            alts,
+                            alternatives,
                             RecognitionRejectionReason.NONE
                         ));
                     } else {
@@ -317,7 +327,7 @@ public class SelectionEngine {
                             eval.cand.sourceStrokeIndices(),
                             eval.cand.centroid(),
                             eval.cand.bounds(),
-                            mergeAlternatives(eval),
+                            detail.retainsAlternatives() ? mergeAlternatives(eval) : List.of(),
                             RecognitionRejectionReason.NONE
                         ));
                     }
@@ -325,8 +335,6 @@ public class SelectionEngine {
                     selectedCandidates.add(eval.cand);
                     usedStrokes.addAll(eval.cand.sourceStrokeIndices());
                     
-                    // Merge alternatives from both sigil and sign evaluations
-                    List<RecognitionAlternative> alts = mergeAlternatives(eval);
                     RecognitionRejectionReason reason = determineRejectionReason(eval);
                     UnknownInkClassification classification =
                             UnknownInkClassifier.classify(eval.cand.strokes(), reason);
@@ -334,18 +342,24 @@ public class SelectionEngine {
                     outUnknowns.add(new UnknownSymbol(
                         eval.cand.id(),
                         eval.cand.sourceStrokeIndices(),
-                        eval.cand.strokes(),
+                        detail.retainsFullDiagnostics() ? eval.cand.strokes() : List.of(),
                         eval.cand.bounds(),
                         CandidateState.UNKNOWN,
                         classification,
-                        alts,
+                        detail.retainsAlternatives() ? mergeAlternatives(eval) : List.of(),
                         reason
                     ));
                 }
             }
         }
         
-        return new SelectedSymbols(outSigils, outSigns, outUnknowns, selectedCandidates, calls, evaluated,
+        return new SelectedSymbols(
+                outSigils,
+                outSigns,
+                outUnknowns,
+                detail.retainsFullDiagnostics() ? selectedCandidates : List.of(),
+                calls,
+                detail.retainsFullDiagnostics() ? evaluated : List.of(),
                 recognitionBudgetExhausted, unevaluatedCandidateCount);
     }
     

@@ -8,6 +8,7 @@ import java.util.Objects;
 public record RecognizedSigil(
     Identifier id,
     String matchedTemplateId,
+    String displayName,
     ElementType element,
     SigilSemantic semantic,
     double recognitionConfidence,
@@ -21,6 +22,7 @@ public record RecognizedSigil(
     public RecognizedSigil {
         id = Objects.requireNonNull(id, "id");
         matchedTemplateId = Objects.requireNonNull(matchedTemplateId, "matchedTemplateId");
+        displayName = Objects.requireNonNull(displayName, "displayName");
         semantic = Objects.requireNonNull(semantic, "semantic");
         sourceStrokeIndices = sourceStrokeIndices == null ? List.of() : List.copyOf(sourceStrokeIndices);
         alternatives = alternatives == null ? List.of() : List.copyOf(alternatives);
