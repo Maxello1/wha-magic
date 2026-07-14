@@ -60,6 +60,28 @@ class StoredSpellResolverTest {
     }
 
     @Test
+    void untrustedCurrentComponentIsReparsedExactlyOnce() {
+        StoredSpell cached = StoredSpell.fromIr(authoritativeIr(), STROKES);
+        SpellIr reparsedIr = reparsedIr();
+        AtomicInteger parseCalls = new AtomicInteger();
+
+        StoredSpellResolver.Resolution resolution = StoredSpellResolver.resolve(
+                cached,
+                STROKES,
+                false,
+                strokes -> {
+                    parseCalls.incrementAndGet();
+                    return new SpellParser.ParseResult(null, reparsedIr);
+                });
+
+        assertAll(
+                () -> assertEquals(1, parseCalls.get()),
+                () -> assertTrue(resolution.reparsed()),
+                () -> assertEquals(reparsedIr, resolution.ir()),
+                () -> assertNotNull(resolution.refreshedSpell()));
+    }
+
+    @Test
     void staleStrokeHashReparsesExactlyOnceAndRefreshesComponent() {
         StoredSpell stale = StoredSpell.fromIr(authoritativeIr(), OTHER_STROKES);
 
