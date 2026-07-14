@@ -35,12 +35,26 @@ public class SpellDictionaryTest {
     @Test
     void failedReloadPreservesPreviousSnapshotAndLoadedState() {
         SpellDictionary.DictionarySnapshot before = SpellDictionary.snapshot();
+        PointCloudRecognizer.PointCloudIndex beforeIndex = SpellDictionary.pointCloudIndex();
+        List<PointCloudRecognizer.SemanticTemplateGroup> beforeSigilGroups =
+                beforeIndex.groups(SymbolKind.SIGIL);
+        PointCloudRecognizer.SemanticTemplateGroup beforeFirstGroup =
+                beforeSigilGroups.getFirst();
+        PointCloudRecognizer.PointCloudTemplate beforeEarthVariant =
+                beforeIndex.variant("earth");
 
         assertThrows(SpellDictionary.DictionaryLoadException.class,
                 () -> SpellDictionary.reload(source(Map.of(
                         SpellDictionary.SIGILS_RESOURCE, oneTemplateArray(template("earth", "earth"))))));
 
         assertSame(before, SpellDictionary.snapshot());
+        assertSame(beforeIndex, SpellDictionary.pointCloudIndex());
+        assertSame(beforeSigilGroups,
+                SpellDictionary.pointCloudIndex().groups(SymbolKind.SIGIL));
+        assertSame(beforeFirstGroup,
+                SpellDictionary.pointCloudIndex().groups(SymbolKind.SIGIL).getFirst());
+        assertSame(beforeEarthVariant,
+                SpellDictionary.pointCloudIndex().variant("earth"));
         assertTrue(SpellDictionary.isLoaded());
         assertEquals(before.templateCount(), PointCloudRecognizer.INSTANCE.getTemplateCount());
         assertEquals(before.templateCount(), RasterRecognizer.getTemplateCount());
@@ -131,8 +145,7 @@ public class SpellDictionaryTest {
         JsonArray sigils = new JsonArray();
         sigils.add(template("earth", "earth_a"));
         sigils.add(template("earth", "earth_b"));
-        SpellDictionary.reload(source(resources(sigils, new JsonArray())));
-        customSnapshotInstalled = true;
+        installCustomDictionary(sigils);
 
         List<List<Point>> strokes = squareStrokes();
         var pointCloud = PointCloudRecognizer.INSTANCE.recognize(strokes, SymbolKind.SIGIL);
@@ -149,6 +162,127 @@ public class SpellDictionaryTest {
         assertEquals(2, SpellDictionary.snapshot().templateCount());
         assertThrows(UnsupportedOperationException.class,
                 () -> SpellDictionary.snapshot().templates().clear());
+    }
+
+    @Test
+    void variantsOfBestSemanticDoNotShrinkConfidenceGap() {
+        JsonArray sigils = new JsonArray();
+        sigils.add(template("earth", "earth_a", squareStrokes()));
+        sigils.add(template("earth", "earth_b", squareStrokes()));
+        sigils.add(template("wind", "wind_triangle", triangleStrokes()));
+        installCustomDictionary(sigils);
+
+        var result = PointCloudRecognizer.INSTANCE.recognize(
+                squareStrokes(), SymbolKind.SIGIL);
+
+        assertEquals("earth", result.id());
+        assertEquals("earth_a", result.matchedTemplateId());
+        assertEquals(List.of("earth", "wind"), result.alternatives().stream()
+                .map(alternative -> alternative.id().getPath()).toList());
+        assertTrue(result.confidenceGap() > 0.0,
+                "An identical visual variant must not become the second semantic match");
+        assertEquals(
+                result.score() - result.alternatives().get(1).rawScore(),
+                result.confidenceGap(),
+                1.0e-12);
+    }
+
+    @Test
+    void recognitionReportsTheBestVisualVariant() {
+        JsonArray sigils = new JsonArray();
+        sigils.add(template("earth", "earth_a_triangle", triangleStrokes()));
+        sigils.add(template("earth", "earth_z_square", squareStrokes()));
+        installCustomDictionary(sigils);
+
+        var result = PointCloudRecognizer.INSTANCE.recognize(
+                squareStrokes(), SymbolKind.SIGIL);
+
+        assertTrue(result.recognized(), () -> result.toString());
+        assertEquals("earth", result.id());
+        assertEquals("earth_z_square", result.matchedTemplateId());
+    }
+
+    @Test
+    void alternativesContainAtMostOneEntryPerSemanticSymbol() {
+        JsonArray sigils = new JsonArray();
+        sigils.add(template("earth", "earth_a", squareStrokes()));
+        sigils.add(template("earth", "earth_b", squareStrokes()));
+        sigils.add(template("wind", "wind_a", triangleStrokes()));
+        sigils.add(template("wind", "wind_b", triangleStrokes()));
+        sigils.add(template("water", "water", diamondStrokes()));
+        installCustomDictionary(sigils);
+
+        var result = PointCloudRecognizer.INSTANCE.recognize(
+                squareStrokes(), SymbolKind.SIGIL);
+        List<String> alternativeIds = result.alternatives().stream()
+                .map(alternative -> alternative.id().getPath())
+                .toList();
+
+        assertEquals(3, alternativeIds.size());
+        assertEquals(Set.of("earth", "wind", "water"), Set.copyOf(alternativeIds));
+    }
+
+    @Test
+    void equalScoreSemanticTiesUseDeterministicIdentifierOrder() {
+        JsonArray sigils = new JsonArray();
+        sigils.add(template("zeta", "zeta_template", squareStrokes()));
+        sigils.add(template("alpha", "alpha_template", squareStrokes()));
+        installCustomDictionary(sigils);
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            var result = PointCloudRecognizer.INSTANCE.recognize(
+                    squareStrokes(), SymbolKind.SIGIL);
+
+            assertEquals("alpha", result.id());
+            assertEquals("alpha_template", result.matchedTemplateId());
+            assertEquals(List.of("alpha", "zeta"), result.alternatives().stream()
+                    .map(alternative -> alternative.id().getPath()).toList());
+            assertEquals(
+                    result.alternatives().get(0).rawScore(),
+                    result.alternatives().get(1).rawScore(),
+                    1.0e-12);
+        }
+    }
+
+    @Test
+    void successfulReloadReplacesEveryPointCloudIndexObjectTogether() {
+        JsonArray firstSigils = new JsonArray();
+        firstSigils.add(template("earth", "shared_template", squareStrokes()));
+        installCustomDictionary(firstSigils);
+
+        SpellDictionary.DictionarySnapshot beforeSnapshot = SpellDictionary.snapshot();
+        List<PointCloudRecognizer.PointCloudTemplate> beforeTemplates =
+                SpellDictionary.pointCloudTemplates();
+        PointCloudRecognizer.PointCloudIndex beforeIndex = SpellDictionary.pointCloudIndex();
+        List<PointCloudRecognizer.SemanticTemplateGroup> beforeGroups =
+                beforeIndex.groups(SymbolKind.SIGIL);
+        PointCloudRecognizer.SemanticTemplateGroup beforeGroup = beforeGroups.getFirst();
+        PointCloudRecognizer.PointCloudTemplate beforeVariant =
+                beforeIndex.variant("shared_template");
+
+        JsonArray secondSigils = new JsonArray();
+        secondSigils.add(template("earth", "shared_template", triangleStrokes()));
+        installCustomDictionary(secondSigils);
+
+        SpellDictionary.DictionarySnapshot afterSnapshot = SpellDictionary.snapshot();
+        List<PointCloudRecognizer.PointCloudTemplate> afterTemplates =
+                SpellDictionary.pointCloudTemplates();
+        PointCloudRecognizer.PointCloudIndex afterIndex = SpellDictionary.pointCloudIndex();
+        List<PointCloudRecognizer.SemanticTemplateGroup> afterGroups =
+                afterIndex.groups(SymbolKind.SIGIL);
+        PointCloudRecognizer.SemanticTemplateGroup afterGroup = afterGroups.getFirst();
+        PointCloudRecognizer.PointCloudTemplate afterVariant =
+                afterIndex.variant("shared_template");
+
+        assertNotSame(beforeSnapshot, afterSnapshot);
+        assertNotEquals(beforeSnapshot.hash(), afterSnapshot.hash());
+        assertNotSame(beforeTemplates, afterTemplates);
+        assertNotSame(beforeIndex, afterIndex);
+        assertNotSame(beforeGroups, afterGroups);
+        assertNotSame(beforeGroup, afterGroup);
+        assertNotSame(beforeVariant, afterVariant);
+        assertSame(beforeVariant, beforeIndex.variant("shared_template"));
+        assertSame(afterVariant, afterIndex.variant("shared_template"));
     }
 
     @Test
@@ -205,6 +339,11 @@ public class SpellDictionaryTest {
         return GSON.toJson(arrayOf(template));
     }
 
+    private void installCustomDictionary(JsonArray sigils) {
+        SpellDictionary.reload(source(resources(sigils, new JsonArray())));
+        customSnapshotInstalled = true;
+    }
+
     private static JsonArray arrayOf(JsonObject template) {
         JsonArray array = new JsonArray();
         array.add(template);
@@ -212,6 +351,13 @@ public class SpellDictionaryTest {
     }
 
     private static JsonObject template(String semanticId, String templateId) {
+        return template(semanticId, templateId, squareStrokes());
+    }
+
+    private static JsonObject template(
+            String semanticId,
+            String templateId,
+            List<List<Point>> strokes) {
         JsonObject entry = new JsonObject();
         entry.addProperty("id", semanticId);
         entry.addProperty("templateId", templateId);
@@ -225,7 +371,7 @@ public class SpellDictionaryTest {
         semantic.addProperty("lifetimeBias", 0.0);
         entry.add("semantic", semantic);
         JsonObject strokeTemplate = new JsonObject();
-        strokeTemplate.add("strokes", GSON.toJsonTree(squareStrokes()));
+        strokeTemplate.add("strokes", GSON.toJsonTree(strokes));
         entry.add("strokeTemplate", strokeTemplate);
         return entry;
     }
@@ -235,6 +381,19 @@ public class SpellDictionaryTest {
                 new Point(0.1, 0.1), new Point(0.9, 0.1),
                 new Point(0.9, 0.9), new Point(0.1, 0.9),
                 new Point(0.1, 0.1)));
+    }
+
+    private static List<List<Point>> triangleStrokes() {
+        return List.of(List.of(
+                new Point(0.5, 0.1), new Point(0.9, 0.9),
+                new Point(0.1, 0.9), new Point(0.5, 0.1)));
+    }
+
+    private static List<List<Point>> diamondStrokes() {
+        return List.of(List.of(
+                new Point(0.5, 0.05), new Point(0.95, 0.5),
+                new Point(0.5, 0.95), new Point(0.05, 0.5),
+                new Point(0.5, 0.05)));
     }
 
     private static JsonObject point(double x, double y) {

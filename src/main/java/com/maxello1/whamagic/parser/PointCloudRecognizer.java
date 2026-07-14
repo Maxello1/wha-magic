@@ -537,77 +537,52 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         }
         prepareRotation(candidate, rotationDeg, workspace);
 
-        List<TemplateScore> scored = new ArrayList<>();
-        for (PointCloudTemplate template : SpellDictionary.pointCloudTemplates()) {
-            if (template.kind != expectedKind) continue;
-            double distance = greedyCloudMatch(workspace, template.points, N);
-            double score = Math.max((2.0 - distance) / 2.0, 0.0);
-            if (workspace.closedSingleStroke && template.closedSingleStroke
-                    && template.centralSymmetryError >= ASYMMETRIC_TEMPLATE_MIN
-                    && workspace.centralSymmetryError
-                            < template.centralSymmetryError * MIN_ASYMMETRY_RATIO) {
-                score = 0.0;
-            }
-
-            SymbolRecognitionRules rules = template.recognitionRules;
-            int requiredClosedContours = rules.minimumClosedContours() >= 0
-                    ? rules.minimumClosedContours()
-                    : template.requiredClosedContourCount;
-            RecognitionRejectionReason structuralRejection = RecognitionRejectionReason.NONE;
-            if (workspace.closedContourCount < requiredClosedContours
-                    || workspace.complexity < rules.minimumComplexity()
-                    || (!rules.allowLineLike()
-                            && workspace.dimensionRatio < rules.minimumDimensionRatio())) {
-                score = 0.0;
-                structuralRejection = RecognitionRejectionReason.INSUFFICIENT_GEOMETRY;
-            } else {
-                int softMinimum = rules.softMinimumStrokeCount();
-                int softMaximum = rules.softMaximumStrokeCount() == 0
-                        ? template.strokeCount
-                        : rules.softMaximumStrokeCount();
-                if (softMinimum > 0 && candidate.strokeCount < softMinimum) {
-                    score *= Math.sqrt((double) candidate.strokeCount / softMinimum);
-                }
-                if (softMaximum > 0 && candidate.strokeCount > softMaximum) {
-                    score *= Math.sqrt((double) softMaximum / candidate.strokeCount);
-                }
-            }
-            scored.add(new TemplateScore(template, score, structuralRejection));
-        }
-
-        if (scored.isEmpty()) {
+        List<SemanticTemplateGroup> groups = SpellDictionary.pointCloudIndex().groups(expectedKind);
+        if (groups.isEmpty()) {
             return SymbolRecognitionResult.rejected(
                     "Unknown",
                     RecognitionRejectionReason.NO_TEMPLATES,
                     defaultRules(expectedKind).minimumScore());
         }
-        scored.sort((a, b) -> {
-            int scoreOrder = Double.compare(b.score, a.score);
-            if (scoreOrder != 0) return scoreOrder;
-            int semanticOrder = a.template.semanticId.compareTo(b.template.semanticId);
-            if (semanticOrder != 0) return semanticOrder;
-            return a.template.templateId.compareTo(b.template.templateId);
-        });
 
-        Map<String, TemplateScore> bestVariantBySemanticId = new LinkedHashMap<>();
-        for (TemplateScore score : scored) {
-            bestVariantBySemanticId.putIfAbsent(score.template.semanticId, score);
+        SemanticMatch[] topMatches = new SemanticMatch[5];
+        int topMatchCount = 0;
+        for (SemanticTemplateGroup group : groups) {
+            TemplateScore bestVariant = null;
+            for (PointCloudTemplate variant : group.variants) {
+                TemplateScore score = scorePreparedVariant(candidate, workspace, group, variant);
+                if (bestVariant == null
+                        || score.score > bestVariant.score
+                        || (score.score == bestVariant.score
+                                && score.template.templateId.compareTo(
+                                        bestVariant.template.templateId) < 0)) {
+                    bestVariant = score;
+                }
+            }
+            topMatchCount = insertTopMatch(
+                    topMatches,
+                    topMatchCount,
+                    new SemanticMatch(
+                            group,
+                            bestVariant.template,
+                            bestVariant.score,
+                            bestVariant.structuralRejection));
         }
-        List<TemplateScore> semanticScores = List.copyOf(bestVariantBySemanticId.values());
-        TemplateScore best = semanticScores.get(0);
-        double secondScore = semanticScores.size() > 1 ? semanticScores.get(1).score : 0.0;
+
+        SemanticMatch best = topMatches[0];
+        double secondScore = topMatchCount > 1 ? topMatches[1].score : 0.0;
         double gap = best.score - secondScore;
 
         List<RecognitionAlternative> alternatives = new ArrayList<>();
         int alternativeCount = detail.retainsAlternatives()
-                ? Math.min(5, semanticScores.size())
+                ? topMatchCount
                 : 0;
         for (int i = 0; i < alternativeCount; i++) {
-            TemplateScore score = semanticScores.get(i);
+            SemanticMatch score = topMatches[i];
             alternatives.add(new RecognitionAlternative(
-                    Identifier.tryParse(score.template.semanticId),
-                    score.template.displayName,
-                    score.template.kind,
+                    score.group.id,
+                    score.group.displayName,
+                    score.group.kind,
                     score.score,
                     0,
                     score.score,
@@ -617,32 +592,32 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                     0));
         }
 
-        SymbolRecognitionRules bestRules = best.template.recognitionRules;
+        SymbolRecognitionRules bestRules = best.group.recognitionRules;
         RecognitionRejectionReason reason = acceptanceReason(
                 best.score, secondScore, best.structuralRejection, bestRules);
         boolean recognized = reason == RecognitionRejectionReason.NONE;
         String displayName = recognized
-                ? best.template.displayName
-                : best.template.displayName + " ("
+                ? best.group.displayName
+                : best.group.displayName + " ("
                         + String.format("%.0f%%", best.score * 100) + ")";
         if (LOGGER.isDebugEnabled()) {
             LOGGER.debug("$P recognize prepared: {} -> {} (score={}, gap={}, rotation={})",
                     expectedKind,
-                    best.template.semanticId,
+                    best.group.semanticId,
                     String.format("%.3f", best.score),
                     String.format("%.3f", gap),
                     rotationDeg);
         }
         return new SymbolRecognitionResult(
                 recognized,
-                best.template.semanticId,
+                best.group.semanticId,
                 best.template.templateId,
                 displayName,
-                best.template.kind,
-                best.template.element,
+                best.group.kind,
+                best.group.element,
                 best.score,
-                best.template.sigilSemantic,
-                best.template.signSemantic,
+                best.group.sigilSemantic,
+                best.group.signSemantic,
                 alternatives,
                 gap,
                 bestRules.minimumScore(),
@@ -650,6 +625,71 @@ public class PointCloudRecognizer implements SymbolRecognizer {
                 best.score,
                 1.0 - best.score,
                 best.score);
+    }
+
+    private static TemplateScore scorePreparedVariant(
+            PreparedCandidate candidate,
+            RotationWorkspace workspace,
+            SemanticTemplateGroup group,
+            PointCloudTemplate variant) {
+        double distance = greedyCloudMatch(workspace, variant.points, N);
+        double score = Math.max((2.0 - distance) / 2.0, 0.0);
+        if (workspace.closedSingleStroke && variant.closedSingleStroke
+                && variant.centralSymmetryError >= ASYMMETRIC_TEMPLATE_MIN
+                && workspace.centralSymmetryError
+                        < variant.centralSymmetryError * MIN_ASYMMETRY_RATIO) {
+            score = 0.0;
+        }
+
+        SymbolRecognitionRules rules = group.recognitionRules;
+        int requiredClosedContours = rules.minimumClosedContours() >= 0
+                ? rules.minimumClosedContours()
+                : variant.requiredClosedContourCount;
+        RecognitionRejectionReason structuralRejection = RecognitionRejectionReason.NONE;
+        if (workspace.closedContourCount < requiredClosedContours
+                || workspace.complexity < rules.minimumComplexity()
+                || (!rules.allowLineLike()
+                        && workspace.dimensionRatio < rules.minimumDimensionRatio())) {
+            score = 0.0;
+            structuralRejection = RecognitionRejectionReason.INSUFFICIENT_GEOMETRY;
+        } else {
+            int softMinimum = rules.softMinimumStrokeCount();
+            int softMaximum = rules.softMaximumStrokeCount() == 0
+                    ? variant.strokeCount
+                    : rules.softMaximumStrokeCount();
+            if (softMinimum > 0 && candidate.strokeCount < softMinimum) {
+                score *= Math.sqrt((double) candidate.strokeCount / softMinimum);
+            }
+            if (softMaximum > 0 && candidate.strokeCount > softMaximum) {
+                score *= Math.sqrt((double) softMaximum / candidate.strokeCount);
+            }
+        }
+        return new TemplateScore(variant, score, structuralRejection);
+    }
+
+    private static int insertTopMatch(
+            SemanticMatch[] topMatches, int currentSize, SemanticMatch candidate) {
+        int insertionIndex = 0;
+        while (insertionIndex < currentSize
+                && compareSemanticMatches(topMatches[insertionIndex], candidate) <= 0) {
+            insertionIndex++;
+        }
+        if (insertionIndex >= topMatches.length) return currentSize;
+
+        int newSize = Math.min(topMatches.length, currentSize + 1);
+        for (int index = newSize - 1; index > insertionIndex; index--) {
+            topMatches[index] = topMatches[index - 1];
+        }
+        topMatches[insertionIndex] = candidate;
+        return newSize;
+    }
+
+    private static int compareSemanticMatches(SemanticMatch left, SemanticMatch right) {
+        int scoreOrder = Double.compare(right.score, left.score);
+        if (scoreOrder != 0) return scoreOrder;
+        int semanticOrder = left.group.semanticId.compareTo(right.group.semanticId);
+        if (semanticOrder != 0) return semanticOrder;
+        return left.template.templateId.compareTo(right.template.templateId);
     }
 
     static RecognitionRejectionReason acceptanceReason(
@@ -686,14 +726,7 @@ public class PointCloudRecognizer implements SymbolRecognizer {
      * @return quality score 0-100, or 0 if template not found
      */
     public static double computeQuality(List<List<Point>> strokes, String templateId) {
-        // Find the template
-        PointCloudTemplate tmpl = null;
-        for (PointCloudTemplate t : SpellDictionary.pointCloudTemplates()) {
-            if (t.templateId.equals(templateId)) {
-                tmpl = t;
-                break;
-            }
-        }
+        PointCloudTemplate tmpl = SpellDictionary.pointCloudIndex().variant(templateId);
         if (tmpl == null) return 0;
         if (!normalizationAllocation(strokes).supported()) return 0;
 
@@ -862,6 +895,87 @@ public class PointCloudRecognizer implements SymbolRecognizer {
             }
             workspace.turningAngles[i] = angle;
         }
+    }
+
+    /** Shared semantic metadata plus its immutable visual variants. */
+    static final class SemanticTemplateGroup {
+        private final Identifier id;
+        private final String semanticId;
+        private final String displayName;
+        private final SymbolKind kind;
+        private final String element;
+        private final SigilSemantic sigilSemantic;
+        private final SignSemantic signSemantic;
+        private final SymbolRecognitionRules recognitionRules;
+        private final List<PointCloudTemplate> variants;
+
+        private SemanticTemplateGroup(
+                Identifier id,
+                PointCloudTemplate representative,
+                List<PointCloudTemplate> variants) {
+            this.id = id;
+            this.semanticId = representative.semanticId;
+            this.displayName = representative.displayName;
+            this.kind = representative.kind;
+            this.element = representative.element;
+            this.sigilSemantic = representative.sigilSemantic;
+            this.signSemantic = representative.signSemantic;
+            this.recognitionRules = representative.recognitionRules;
+            this.variants = List.copyOf(variants);
+        }
+    }
+
+    /** All point-cloud lookup structures published as one immutable dictionary state. */
+    static final class PointCloudIndex {
+        private final List<SemanticTemplateGroup> sigils;
+        private final List<SemanticTemplateGroup> signs;
+        private final Map<String, PointCloudTemplate> variantsByTemplateId;
+
+        private PointCloudIndex(
+                List<SemanticTemplateGroup> sigils,
+                List<SemanticTemplateGroup> signs,
+                Map<String, PointCloudTemplate> variantsByTemplateId) {
+            this.sigils = List.copyOf(sigils);
+            this.signs = List.copyOf(signs);
+            this.variantsByTemplateId = Map.copyOf(variantsByTemplateId);
+        }
+
+        static PointCloudIndex empty() {
+            return new PointCloudIndex(List.of(), List.of(), Map.of());
+        }
+
+        List<SemanticTemplateGroup> groups(SymbolKind kind) {
+            return kind == SymbolKind.SIGIL ? sigils : signs;
+        }
+
+        PointCloudTemplate variant(String templateId) {
+            return variantsByTemplateId.get(templateId);
+        }
+    }
+
+    static PointCloudIndex buildIndex(List<PointCloudTemplate> templates) {
+        Map<Identifier, List<PointCloudTemplate>> grouped = new LinkedHashMap<>();
+        Map<String, PointCloudTemplate> byTemplateId = new LinkedHashMap<>();
+        for (PointCloudTemplate template : templates) {
+            Identifier semanticId = Identifier.tryParse(template.semanticId);
+            if (semanticId == null) {
+                throw new IllegalArgumentException(
+                        "Invalid semantic identifier in point-cloud template: "
+                                + template.semanticId);
+            }
+            grouped.computeIfAbsent(semanticId, ignored -> new ArrayList<>()).add(template);
+            byTemplateId.put(template.templateId, template);
+        }
+
+        List<SemanticTemplateGroup> sigils = new ArrayList<>();
+        List<SemanticTemplateGroup> signs = new ArrayList<>();
+        for (Map.Entry<Identifier, List<PointCloudTemplate>> entry : grouped.entrySet()) {
+            List<PointCloudTemplate> variants = entry.getValue();
+            SemanticTemplateGroup group = new SemanticTemplateGroup(
+                    entry.getKey(), variants.get(0), variants);
+            (group.kind == SymbolKind.SIGIL ? sigils : signs).add(group);
+        }
+        return new PointCloudIndex(sigils, signs, byTemplateId);
     }
 
     private static int countClosedContours(
@@ -1816,6 +1930,12 @@ public class PointCloudRecognizer implements SymbolRecognizer {
     }
 
     private record TemplateScore(
+            PointCloudTemplate template,
+            double score,
+            RecognitionRejectionReason structuralRejection) {}
+
+    private record SemanticMatch(
+            SemanticTemplateGroup group,
             PointCloudTemplate template,
             double score,
             RecognitionRejectionReason structuralRejection) {}

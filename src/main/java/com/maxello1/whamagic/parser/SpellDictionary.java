@@ -82,6 +82,7 @@ public final class SpellDictionary {
             boolean loaded,
             DictionarySnapshot snapshot,
             List<PointCloudRecognizer.PointCloudTemplate> pointCloudTemplates,
+            PointCloudRecognizer.PointCloudIndex pointCloudIndex,
             List<RasterRecognizer.RasterTemplate> rasterTemplates
     ) {
         private ActiveState {
@@ -93,7 +94,7 @@ public final class SpellDictionary {
             return new ActiveState(
                     false,
                     new DictionarySnapshot(DICTIONARY_VERSION, "unloaded", List.of()),
-                    List.of(), List.of());
+                    List.of(), PointCloudRecognizer.PointCloudIndex.empty(), List.of());
         }
     }
 
@@ -146,6 +147,11 @@ public final class SpellDictionary {
         return active.pointCloudTemplates();
     }
 
+    static PointCloudRecognizer.PointCloudIndex pointCloudIndex() {
+        ensureLoaded();
+        return active.pointCloudIndex();
+    }
+
     static List<RasterRecognizer.RasterTemplate> rasterTemplates() {
         ensureLoaded();
         return active.rasterTemplates();
@@ -188,7 +194,9 @@ public final class SpellDictionary {
                     DICTIONARY_VERSION,
                     dictionaryHash(sigilBytes, signBytes),
                     identities);
-            return new ActiveState(true, metadata, pointCloud, raster);
+            PointCloudRecognizer.PointCloudIndex pointCloudIndex =
+                    PointCloudRecognizer.buildIndex(pointCloud);
+            return new ActiveState(true, metadata, pointCloud, pointCloudIndex, raster);
         } catch (DictionaryLoadException exception) {
             throw exception;
         } catch (Exception exception) {
