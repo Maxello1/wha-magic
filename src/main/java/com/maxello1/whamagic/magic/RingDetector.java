@@ -22,8 +22,10 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-public class RingDetector {
+public final class RingDetector {
     private static final Logger LOGGER = LoggerFactory.getLogger(RingDetector.class);
+
+    private RingDetector() {}
 
     public record RingGlyph(Point center, double radius, double completeness, boolean isClosed,
                             double gapAngleDeg, double rmse,

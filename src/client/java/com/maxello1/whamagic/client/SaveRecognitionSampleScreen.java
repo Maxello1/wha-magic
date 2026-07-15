@@ -159,7 +159,7 @@ final class SaveRecognitionSampleScreen extends Screen {
                 validationError = "Could not write the sample file. Check the log for details.";
                 return;
             }
-            parent.returnFromSampleScreen("Sample saved: " + path, true);
+            parent.returnFromSampleScreen("Sample saved: " + path);
         } catch (IllegalArgumentException | IllegalStateException exception) {
             validationError = exception.getMessage();
             validateForm();
@@ -168,7 +168,7 @@ final class SaveRecognitionSampleScreen extends Screen {
 
     private void cancel() {
         capture.cancel();
-        parent.returnFromSampleScreen("Sample save cancelled.", true);
+        parent.returnFromSampleScreen("Sample save cancelled.");
     }
 
     @Override

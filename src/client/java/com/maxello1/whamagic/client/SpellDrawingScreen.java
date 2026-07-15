@@ -1,5 +1,6 @@
 package com.maxello1.whamagic.client;
 
+import com.maxello1.whamagic.dev.RecognitionSampleCapture;
 import com.maxello1.whamagic.editor.DrawingEditorState;
 import com.maxello1.whamagic.network.CancelSpellEditPayload;
 import com.maxello1.whamagic.network.DrawingLimits;
@@ -43,13 +44,12 @@ public class SpellDrawingScreen extends Screen {
 
     private boolean eraserMode = false;
     private boolean erasing = false;
-    private double eraserX = 0, eraserY = 0;
     
     // Debug overlay: 0=off, 1=basic, 2=verbose
     private int debugMode = 0;
     private String parserDebugInfo = "";
-    private com.maxello1.whamagic.parser.SpellParser.ParseResult lastParseResult = null;
-    private com.maxello1.whamagic.parser.SpellParser.ParseResult fullDiagnosticsResult = null;
+    private SpellParser.ParseResult lastParseResult = null;
+    private SpellParser.ParseResult fullDiagnosticsResult = null;
     
     // Sample recording feedback
     private String sampleFeedback = "";
@@ -240,7 +240,7 @@ public class SpellDrawingScreen extends Screen {
             if (minecraft != null) {
                 minecraft.setScreenAndShow(new SaveRecognitionSampleScreen(
                         this,
-                        new com.maxello1.whamagic.dev.RecognitionSampleCapture(
+                        new RecognitionSampleCapture(
                                 editor.strokes(), diagnostics)));
             }
             return true;
@@ -256,16 +256,7 @@ public class SpellDrawingScreen extends Screen {
         return super.keyPressed(event);
     }
 
-    @Override
-    public void mouseMoved(double mouseX, double mouseY) {
-        eraserX = mouseX;
-        eraserY = mouseY;
-        super.mouseMoved(mouseX, mouseY);
-    }
-
     private void eraseAtPosition(double mx, double my) {
-        eraserX = mx;
-        eraserY = my;
         Point normMouse = toNormalized(mx, my);
         double rSq = ERASER_RADIUS_NORM * ERASER_RADIUS_NORM;
         List<List<Point>> newStrokes = new ArrayList<>();
@@ -425,10 +416,10 @@ public class SpellDrawingScreen extends Screen {
         super.removed();
     }
 
-    void returnFromSampleScreen(String message, boolean success) {
+    void returnFromSampleScreen(String message) {
         sampleFeedback = message;
         sampleFeedbackTime = System.currentTimeMillis();
-        editorMessageColor = success ? 0xFF55FF55 : 0xFFFF5555;
+        editorMessageColor = 0xFF55FF55;
         ClientUtils.showSpellScreen(this);
     }
 

@@ -81,20 +81,13 @@ public final class SpellDictionary {
     private record ActiveState(
             boolean loaded,
             DictionarySnapshot snapshot,
-            List<PointCloudRecognizer.PointCloudTemplate> pointCloudTemplates,
-            PointCloudRecognizer.PointCloudIndex pointCloudIndex,
-            List<RasterRecognizer.RasterTemplate> rasterTemplates
+            PointCloudRecognizer.PointCloudIndex pointCloudIndex
     ) {
-        private ActiveState {
-            pointCloudTemplates = List.copyOf(pointCloudTemplates);
-            rasterTemplates = List.copyOf(rasterTemplates);
-        }
-
         private static ActiveState unloaded() {
             return new ActiveState(
                     false,
                     new DictionarySnapshot(DICTIONARY_VERSION, "unloaded", List.of()),
-                    List.of(), PointCloudRecognizer.PointCloudIndex.empty(), List.of());
+                    PointCloudRecognizer.PointCloudIndex.empty());
         }
     }
 
@@ -142,19 +135,9 @@ public final class SpellDictionary {
         return active.snapshot();
     }
 
-    static List<PointCloudRecognizer.PointCloudTemplate> pointCloudTemplates() {
-        ensureLoaded();
-        return active.pointCloudTemplates();
-    }
-
     static PointCloudRecognizer.PointCloudIndex pointCloudIndex() {
         ensureLoaded();
         return active.pointCloudIndex();
-    }
-
-    static List<RasterRecognizer.RasterTemplate> rasterTemplates() {
-        ensureLoaded();
-        return active.rasterTemplates();
     }
 
     private static ActiveState buildSnapshot(ResourceSource source) {
@@ -174,12 +157,10 @@ public final class SpellDictionary {
             }
 
             List<PointCloudRecognizer.PointCloudTemplate> pointCloud = new ArrayList<>();
-            List<RasterRecognizer.RasterTemplate> raster = new ArrayList<>();
             List<TemplateIdentity> identities = new ArrayList<>();
             for (DictionaryTemplate definition : definitions) {
                 try {
                     pointCloud.add(PointCloudRecognizer.buildTemplate(definition));
-                    raster.add(RasterRecognizer.buildTemplate(definition));
                 } catch (RuntimeException exception) {
                     throw new DictionaryLoadException(
                             "Unsupported template complexity or geometry for '"
@@ -196,7 +177,7 @@ public final class SpellDictionary {
                     identities);
             PointCloudRecognizer.PointCloudIndex pointCloudIndex =
                     PointCloudRecognizer.buildIndex(pointCloud);
-            return new ActiveState(true, metadata, pointCloud, pointCloudIndex, raster);
+            return new ActiveState(true, metadata, pointCloudIndex);
         } catch (DictionaryLoadException exception) {
             throw exception;
         } catch (Exception exception) {

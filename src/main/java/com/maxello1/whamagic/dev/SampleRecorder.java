@@ -101,40 +101,6 @@ public final class SampleRecorder {
         return timestamp + (middle.isEmpty() ? "intent-unspecified" : middle) + suffix;
     }
 
-    static String layoutLabel(SpellParser.ParseResult result) {
-        if (result == null) {
-            return "unparsed";
-        }
-
-        TreeMap<String, Integer> symbols = new TreeMap<>();
-        if (result.ast != null) {
-            for (RecognizedSigil sigil : result.ast.sigils()) {
-                if (sigil.id() != null) {
-                    symbols.merge(sigil.id().getPath(), 1, Integer::sum);
-                }
-            }
-            for (RecognizedSign sign : result.ast.signs()) {
-                if (sign.id() != null && !sign.id().isBlank()) {
-                    symbols.merge(sign.id(), 1, Integer::sum);
-                }
-            }
-        }
-
-        String status = result.isValidSpell() ? "valid" : "invalid";
-        if (symbols.isEmpty()) {
-            return status + "_unknown";
-        }
-
-        StringBuilder label = new StringBuilder(status);
-        symbols.forEach((symbol, count) -> {
-            label.append('_').append(fileSafe(symbol));
-            if (count > 1) {
-                label.append("-x").append(count);
-            }
-        });
-        return label.length() <= 96 ? label.toString() : label.substring(0, 96);
-    }
-
     static String fileSafe(String value) {
         String safe = value.toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9-]+", "-")

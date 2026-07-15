@@ -49,13 +49,12 @@ import java.util.Map;
  *   <li><b>Quality</b> — "How well did they draw it?" Feeds into spell power.</li>
  * </ol>
  */
-public class PointCloudRecognizer implements SymbolRecognizer {
+public final class PointCloudRecognizer {
     public static final String RECOGNIZER_VERSION = "point-cloud-p-curvature-1";
 
-    /** Singleton instance for use via the interface. */
-    public static final PointCloudRecognizer INSTANCE = new PointCloudRecognizer();
-
     private static final Logger LOGGER = LoggerFactory.getLogger(PointCloudRecognizer.class);
+
+    private PointCloudRecognizer() {}
 
     /** Number of resample points. 32 is proven accurate for the current gesture set. */
     public static final int N = 32;
@@ -267,17 +266,6 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         }
     }
 
-    // ---- SymbolRecognizer interface ----
-
-    @Override public String name() { return "$P + curvature"; }
-
-    @Override public int getTemplateCount() { return SpellDictionary.pointCloudTemplates().size(); }
-
-    @Override
-    public SymbolRecognitionResult recognize(List<List<Point>> strokes, SymbolKind expectedKind) {
-        return recognizeStatic(strokes, expectedKind, ParseDetail.FULL_DIAGNOSTICS);
-    }
-
     static PointCloudTemplate buildTemplate(DictionaryTemplate definition) {
         List<List<Point>> strokes = definition.strokes();
         NormalizationAllocation allocation = normalizationAllocation(strokes);
@@ -427,145 +415,6 @@ public class PointCloudRecognizer implements SymbolRecognizer {
         PreparedCandidate prepared = prepareCandidate(strokes);
         return recognizePrepared(
                 prepared, 0.0, expectedKind, detail, prepared.newWorkspace());
-    }
-
-    /** Legacy allocation-heavy path retained package-private for equivalence tests only. */
-    static SymbolRecognitionResult recognizeReference(
-            List<List<Point>> strokes,
-            SymbolKind expectedKind,
-            ParseDetail detail) {
-        if (strokes == null || strokes.isEmpty()) {
-            return SymbolRecognitionResult.rejected("Unknown",
-                    RecognitionRejectionReason.NO_STROKES,
-                    defaultRules(expectedKind).minimumScore());
-        }
-
-        NormalizationAllocation allocation = normalizationAllocation(strokes);
-        if (!allocation.supported()) {
-            return SymbolRecognitionResult.rejected("Unknown",
-                    RecognitionRejectionReason.UNSUPPORTED_COMPLEXITY,
-                    defaultRules(expectedKind).minimumScore());
-        }
-
-        // Convert and normalize candidate
-        CloudPoint[] candidateCloud = strokesToCloud(strokes);
-        if (candidateCloud.length < 3) {
-            return SymbolRecognitionResult.rejected("Unknown",
-                    RecognitionRejectionReason.NO_STROKES,
-                    defaultRules(expectedKind).minimumScore());
-        }
-        CloudPoint[] candidate = normalize(candidateCloud, N);
-        int candidateClosedContourCount = closedContourCount(strokes);
-        boolean candidateClosedSingleStroke = isClosedSingleStroke(strokes);
-        double candidateSymmetryError = candidateClosedSingleStroke ? centralSymmetryError(candidate) : 0.0;
-        double candidateComplexity = candidateComplexity(strokes);
-        double candidateDimensionRatio = candidateDimensionRatio(strokes);
-
-        // Match against each template of the expected kind
-        List<TemplateScore> scored = new ArrayList<>();
-        for (PointCloudTemplate tmpl : SpellDictionary.pointCloudTemplates()) {
-            if (tmpl.kind != expectedKind) continue;
-            double distance = greedyCloudMatch(candidate, tmpl.points, N);
-            double score = Math.max((2.0 - distance) / 2.0, 0.0);
-            if (candidateClosedSingleStroke && tmpl.closedSingleStroke
-                    && tmpl.centralSymmetryError >= ASYMMETRIC_TEMPLATE_MIN
-                    && candidateSymmetryError < tmpl.centralSymmetryError * MIN_ASYMMETRY_RATIO) {
-                score = 0.0;
-            }
-            SymbolRecognitionRules rules = tmpl.recognitionRules;
-            int candidateStrokeCount = strokes.size();
-            int requiredClosedContours = rules.minimumClosedContours() >= 0
-                    ? rules.minimumClosedContours()
-                    : tmpl.requiredClosedContourCount;
-            RecognitionRejectionReason structuralRejection = RecognitionRejectionReason.NONE;
-
-            if (candidateClosedContourCount < requiredClosedContours
-                    || candidateComplexity < rules.minimumComplexity()
-                    || (!rules.allowLineLike()
-                        && candidateDimensionRatio < rules.minimumDimensionRatio())) {
-                score = 0;
-                structuralRejection = RecognitionRejectionReason.INSUFFICIENT_GEOMETRY;
-            } else {
-                int softMinimum = rules.softMinimumStrokeCount();
-                int softMaximum = rules.softMaximumStrokeCount() == 0
-                        ? tmpl.strokeCount
-                        : rules.softMaximumStrokeCount();
-                if (softMinimum > 0 && candidateStrokeCount < softMinimum) {
-                    score *= Math.sqrt((double) candidateStrokeCount / softMinimum);
-                }
-                if (softMaximum > 0 && candidateStrokeCount > softMaximum) {
-                    score *= Math.sqrt((double) softMaximum / candidateStrokeCount);
-                }
-            }
-            scored.add(new TemplateScore(tmpl, score, structuralRejection));
-        }
-
-        if (scored.isEmpty()) {
-            return SymbolRecognitionResult.rejected("Unknown",
-                    RecognitionRejectionReason.NO_TEMPLATES,
-                    defaultRules(expectedKind).minimumScore());
-        }
-
-        scored.sort((a, b) -> {
-            int scoreOrder = Double.compare(b.score, a.score);
-            if (scoreOrder != 0) return scoreOrder;
-            int semanticOrder = a.template.semanticId.compareTo(b.template.semanticId);
-            if (semanticOrder != 0) return semanticOrder;
-            return a.template.templateId.compareTo(b.template.templateId);
-        });
-
-        Map<String, TemplateScore> bestVariantBySemanticId = new LinkedHashMap<>();
-        for (TemplateScore score : scored) {
-            bestVariantBySemanticId.putIfAbsent(score.template.semanticId, score);
-        }
-        List<TemplateScore> semanticScores = List.copyOf(bestVariantBySemanticId.values());
-        TemplateScore best = semanticScores.get(0);
-        double secondScore = semanticScores.size() > 1 ? semanticScores.get(1).score : 0;
-        double gap = best.score - secondScore;
-
-        // Alternatives expose each semantic symbol only once, using its best visual variant.
-        List<RecognitionAlternative> alternatives = new ArrayList<>();
-        int altCount = detail.retainsAlternatives()
-                ? Math.min(5, semanticScores.size())
-                : 0;
-        for (int i = 0; i < altCount; i++) {
-            TemplateScore ts = semanticScores.get(i);
-            alternatives.add(new RecognitionAlternative(
-                    Identifier.tryParse(ts.template.semanticId),
-                    ts.template.displayName,
-                    ts.template.kind,
-                    ts.score,
-                    0, // roleScore set by SelectionEngine
-                    ts.score, // templateCoverage ~ $P score
-                    ts.score, // candidateExplainedRatio ~ $P score
-                    1.0 - ts.score, // unexplainedInkRatio
-                    ts.score, // structuralScore = $P score
-                    0  // rotationDeg set by SelectionEngine
-            ));
-        }
-
-        // Apply gates
-        SymbolRecognitionRules bestRules = best.template.recognitionRules;
-        RecognitionRejectionReason reason = acceptanceReason(
-                best.score, secondScore, best.structuralRejection, bestRules);
-
-        boolean recognized = reason == RecognitionRejectionReason.NONE;
-
-        String displayName = recognized ? best.template.displayName
-                : best.template.displayName + " (" + String.format("%.0f%%", best.score * 100) + ")";
-
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("$P recognize: {} -> {} (score={}, gap={})",
-                    expectedKind, best.template.semanticId,
-                    String.format("%.3f", best.score), String.format("%.3f", gap));
-        }
-
-        return new SymbolRecognitionResult(
-                recognized, best.template.semanticId, best.template.templateId, displayName,
-                best.template.kind, best.template.element, best.score,
-                best.template.sigilSemantic, best.template.signSemantic,
-                alternatives, gap, bestRules.minimumScore(), reason,
-                best.score, 1.0 - best.score, best.score);
     }
 
     static SymbolRecognitionResult recognizePrepared(

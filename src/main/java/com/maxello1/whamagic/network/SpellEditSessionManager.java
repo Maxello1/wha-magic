@@ -38,14 +38,8 @@ public final class SpellEditSessionManager {
     private final AtomicLong nextRevision;
 
     public SpellEditSessionManager() {
-        this(ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE));
-    }
-
-    SpellEditSessionManager(long firstRevision) {
-        if (firstRevision <= 0) {
-            throw new IllegalArgumentException("firstRevision must be positive");
-        }
-        nextRevision = new AtomicLong(firstRevision);
+        nextRevision = new AtomicLong(
+                ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE));
     }
 
     public SessionToken open(

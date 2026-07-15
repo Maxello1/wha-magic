@@ -19,7 +19,6 @@ import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.level.Level;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -57,7 +56,7 @@ public class SpellPaperItem extends Item {
         
         if (!level.isClientSide()) {
             if (hasInkWand(player) || player.getAbilities().instabuild) {
-                List<List<Point>> existingStrokes = strokes == null ? new ArrayList<>() : strokes;
+                List<List<Point>> existingStrokes = strokes == null ? List.of() : strokes;
                 WitchHatMod.openSpellEditor(
                         (ServerPlayer) player,
                         hand,
@@ -82,7 +81,7 @@ public class SpellPaperItem extends Item {
     @Override
     public Component getName(ItemStack stack) {
         StoredSpell spell = stack.get(WitchHatMod.STORED_SPELL_COMPONENT);
-        if (spell != null && spell.displayName() != null && !spell.displayName().isEmpty()) {
+        if (spell != null && !spell.displayName().isEmpty()) {
             String name = spell.displayName();
             String capitalized = name.substring(0, 1).toUpperCase() + name.substring(1);
             return Component.literal(capitalized + " Spell");
@@ -99,7 +98,7 @@ public class SpellPaperItem extends Item {
             Consumer<Component> tooltipComponents,
             TooltipFlag tooltipFlag) {
         StoredSpell spell = stack.get(WitchHatMod.STORED_SPELL_COMPONENT);
-        if (spell != null && spell.displayName() != null && !spell.displayName().isEmpty()) {
+        if (spell != null && !spell.displayName().isEmpty()) {
             String prefix = spell.state() == SpellState.ACTIVE ? "§aActive: " : "§dPrepared: ";
             tooltipComponents.accept(Component.literal(prefix + spell.displayName()));
         } else {

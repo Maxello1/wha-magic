@@ -61,7 +61,7 @@ public class SpellParserTest {
 
     @Test
     public void testDictionaryLoaded() {
-        int templateCount = com.maxello1.whamagic.parser.RasterRecognizer.getTemplateCount();
+        int templateCount = SpellDictionary.snapshot().templateCount();
         assertTrue(templateCount > 0, "Dictionary should have loaded templates");
         assertEquals(11, templateCount, "Expected 8 canonical and 3 player-trained visual templates");
         assertEquals(8, SpellDictionary.snapshot().templates().stream()
@@ -130,7 +130,7 @@ public class SpellParserTest {
         var light = result.ast.sigils().stream()
                 .filter(sigil -> sigil.id() != null && "light".equals(sigil.id().getPath()))
                 .findFirst().orElseThrow();
-        var directRecognition = PointCloudRecognizer.INSTANCE.recognize(
+        var directRecognition = PointCloudRecognizer.recognizeStatic(
                 strokes.subList(1, strokes.size()), SymbolKind.SIGIL);
 
         assertNotNull(light.semantic(), "Dictionary sigil semantics must survive recognition");
@@ -149,7 +149,7 @@ public class SpellParserTest {
         List<Point> base = canonical.get(1);
         for (int i = base.size() / 2 - 1; i >= 0; i--) mergedStroke.add(base.get(i));
         for (int i = 1; i < base.size(); i++) mergedStroke.add(base.get(i));
-        var merged = PointCloudRecognizer.INSTANCE.recognize(List.of(mergedStroke), SymbolKind.SIGN);
+        var merged = PointCloudRecognizer.recognizeStatic(List.of(mergedStroke), SymbolKind.SIGN);
 
         List<Point> vertical = canonical.get(0);
         int splitAt = vertical.size() / 2;
@@ -157,7 +157,7 @@ public class SpellParserTest {
                 List.copyOf(vertical.subList(0, splitAt + 1)),
                 List.copyOf(vertical.subList(splitAt, vertical.size())),
                 base);
-        var splitResult = PointCloudRecognizer.INSTANCE.recognize(split, SymbolKind.SIGN);
+        var splitResult = PointCloudRecognizer.recognizeStatic(split, SymbolKind.SIGN);
 
         assertTrue(merged.recognized(), () -> "Merged Column rejected: " + merged);
         assertEquals("column", merged.id());

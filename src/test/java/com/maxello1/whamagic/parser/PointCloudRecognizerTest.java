@@ -16,21 +16,7 @@ import static org.junit.jupiter.api.Assertions.*;
 public class PointCloudRecognizerTest {
 
     @Test
-    public void symbolRecognizerUsesRecognizerNeutralResult() throws Exception {
-        assertEquals(SymbolRecognitionResult.class,
-                SymbolRecognizer.class
-                        .getMethod("recognize", List.class, SymbolKind.class)
-                        .getReturnType());
-        assertEquals(SymbolRecognitionResult.class,
-                PointCloudRecognizer.class
-                        .getMethod("recognize", List.class, SymbolKind.class)
-                        .getReturnType());
-        assertEquals(SymbolRecognitionResult.class,
-                RasterRecognizer.class
-                        .getMethod("recognize", List.class, SymbolKind.class)
-                        .getReturnType());
-        assertTrue(java.util.Arrays.stream(RasterRecognizer.class.getDeclaredClasses())
-                .noneMatch(type -> "RecognitionResult".equals(type.getSimpleName())));
+    public void rejectedResultsExposeImmutableAlternatives() {
         SymbolRecognitionResult rejected = SymbolRecognitionResult.rejected(
                 "Unknown", RecognitionRejectionReason.NO_STROKES, 0.20);
         assertThrows(UnsupportedOperationException.class,

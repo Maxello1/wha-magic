@@ -96,7 +96,7 @@ public final class DrawingEditorState {
     public void addStroke(List<Point> stroke) {
         Objects.requireNonNull(stroke, "stroke");
         List<List<Point>> replacement = new ArrayList<>(strokes);
-        replacement.add(List.copyOf(stroke));
+        replacement.add(stroke);
         replaceStrokes(replacement);
     }
 
@@ -130,14 +130,6 @@ public final class DrawingEditorState {
         pushCapped(undoHistory, snapshot());
         restore(redoHistory.removeLast());
         return true;
-    }
-
-    int undoHistorySize() {
-        return undoHistory.size();
-    }
-
-    int redoHistorySize() {
-        return redoHistory.size();
     }
 
     private List<List<Point>> snapshot() {

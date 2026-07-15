@@ -56,8 +56,7 @@ public class SpellDictionaryTest {
         assertSame(beforeEarthVariant,
                 SpellDictionary.pointCloudIndex().variant("earth"));
         assertTrue(SpellDictionary.isLoaded());
-        assertEquals(before.templateCount(), PointCloudRecognizer.INSTANCE.getTemplateCount());
-        assertEquals(before.templateCount(), RasterRecognizer.getTemplateCount());
+        assertEquals(before.templateCount(), SpellDictionary.snapshot().templateCount());
     }
 
     @Test
@@ -148,15 +147,12 @@ public class SpellDictionaryTest {
         installCustomDictionary(sigils);
 
         List<List<Point>> strokes = squareStrokes();
-        var pointCloud = PointCloudRecognizer.INSTANCE.recognize(strokes, SymbolKind.SIGIL);
-        var raster = RasterRecognizer.recognize(strokes, SymbolKind.SIGIL);
+        var pointCloud = PointCloudRecognizer.recognizeStatic(strokes, SymbolKind.SIGIL);
 
         assertTrue(pointCloud.recognized(), () -> pointCloud.toString());
         assertEquals("earth", pointCloud.id());
         assertEquals("earth_a", pointCloud.matchedTemplateId());
         assertEquals(List.of("earth"), pointCloud.alternatives().stream()
-                .map(alternative -> alternative.id().getPath()).toList());
-        assertEquals(List.of("earth"), raster.alternatives().stream()
                 .map(alternative -> alternative.id().getPath()).toList());
         assertTrue(PointCloudRecognizer.computeQuality(strokes, pointCloud.matchedTemplateId()) > 0);
         assertEquals(2, SpellDictionary.snapshot().templateCount());
@@ -172,7 +168,7 @@ public class SpellDictionaryTest {
         sigils.add(template("wind", "wind_triangle", triangleStrokes()));
         installCustomDictionary(sigils);
 
-        var result = PointCloudRecognizer.INSTANCE.recognize(
+        var result = PointCloudRecognizer.recognizeStatic(
                 squareStrokes(), SymbolKind.SIGIL);
 
         assertEquals("earth", result.id());
@@ -194,7 +190,7 @@ public class SpellDictionaryTest {
         sigils.add(template("earth", "earth_z_square", squareStrokes()));
         installCustomDictionary(sigils);
 
-        var result = PointCloudRecognizer.INSTANCE.recognize(
+        var result = PointCloudRecognizer.recognizeStatic(
                 squareStrokes(), SymbolKind.SIGIL);
 
         assertTrue(result.recognized(), () -> result.toString());
@@ -212,7 +208,7 @@ public class SpellDictionaryTest {
         sigils.add(template("water", "water", diamondStrokes()));
         installCustomDictionary(sigils);
 
-        var result = PointCloudRecognizer.INSTANCE.recognize(
+        var result = PointCloudRecognizer.recognizeStatic(
                 squareStrokes(), SymbolKind.SIGIL);
         List<String> alternativeIds = result.alternatives().stream()
                 .map(alternative -> alternative.id().getPath())
@@ -230,7 +226,7 @@ public class SpellDictionaryTest {
         installCustomDictionary(sigils);
 
         for (int attempt = 0; attempt < 3; attempt++) {
-            var result = PointCloudRecognizer.INSTANCE.recognize(
+            var result = PointCloudRecognizer.recognizeStatic(
                     squareStrokes(), SymbolKind.SIGIL);
 
             assertEquals("alpha", result.id());
@@ -251,8 +247,6 @@ public class SpellDictionaryTest {
         installCustomDictionary(firstSigils);
 
         SpellDictionary.DictionarySnapshot beforeSnapshot = SpellDictionary.snapshot();
-        List<PointCloudRecognizer.PointCloudTemplate> beforeTemplates =
-                SpellDictionary.pointCloudTemplates();
         PointCloudRecognizer.PointCloudIndex beforeIndex = SpellDictionary.pointCloudIndex();
         List<PointCloudRecognizer.SemanticTemplateGroup> beforeGroups =
                 beforeIndex.groups(SymbolKind.SIGIL);
@@ -265,8 +259,6 @@ public class SpellDictionaryTest {
         installCustomDictionary(secondSigils);
 
         SpellDictionary.DictionarySnapshot afterSnapshot = SpellDictionary.snapshot();
-        List<PointCloudRecognizer.PointCloudTemplate> afterTemplates =
-                SpellDictionary.pointCloudTemplates();
         PointCloudRecognizer.PointCloudIndex afterIndex = SpellDictionary.pointCloudIndex();
         List<PointCloudRecognizer.SemanticTemplateGroup> afterGroups =
                 afterIndex.groups(SymbolKind.SIGIL);
@@ -276,7 +268,6 @@ public class SpellDictionaryTest {
 
         assertNotSame(beforeSnapshot, afterSnapshot);
         assertNotEquals(beforeSnapshot.hash(), afterSnapshot.hash());
-        assertNotSame(beforeTemplates, afterTemplates);
         assertNotSame(beforeIndex, afterIndex);
         assertNotSame(beforeGroups, afterGroups);
         assertNotSame(beforeGroup, afterGroup);
@@ -289,11 +280,11 @@ public class SpellDictionaryTest {
     void repeatedReloadsProduceDeterministicMetadataAndRecognition() {
         SpellDictionary.reload();
         SpellDictionary.DictionarySnapshot first = SpellDictionary.snapshot();
-        var firstResult = PointCloudRecognizer.INSTANCE.recognize(squareStrokes(), SymbolKind.SIGIL);
+        var firstResult = PointCloudRecognizer.recognizeStatic(squareStrokes(), SymbolKind.SIGIL);
 
         SpellDictionary.reload();
         SpellDictionary.DictionarySnapshot second = SpellDictionary.snapshot();
-        var secondResult = PointCloudRecognizer.INSTANCE.recognize(squareStrokes(), SymbolKind.SIGIL);
+        var secondResult = PointCloudRecognizer.recognizeStatic(squareStrokes(), SymbolKind.SIGIL);
 
         assertEquals(first, second);
         assertEquals(firstResult.id(), secondResult.id());

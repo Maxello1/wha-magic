@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.HashSet;
 import java.util.Set;
 
-public class SelectionEngine {
+public final class SelectionEngine {
     
     /** Minimum margin by which a super-candidate must beat sub-candidates to be preferred. */
     static final double SUPER_CANDIDATE_WIN_MARGIN = 0.05;
@@ -32,6 +32,8 @@ public class SelectionEngine {
      */
     private static final double[] STANDALONE_SIGN_ROTATION_OFFSETS = {0, 90, 180, 270};
     private static final double[] RING_SIGN_ROTATION_OFFSETS = {0, 90, 180, 270, 15, -15, 30, -30, 45, -45};
+
+    private SelectionEngine() {}
     
     public record SelectedSymbols(
         List<RecognizedSigil> sigils,
@@ -53,24 +55,14 @@ public class SelectionEngine {
             RingDetector.RingGlyph ring,
             int maxCalls,
             ParseDetail detail) {
-        return selectInternal(candidates, ring, maxCalls, detail, true);
-    }
-
-    /** Allocation-heavy rotation reference retained package-private for equivalence tests. */
-    static SelectedSymbols selectReference(
-            List<SymbolCandidate> candidates,
-            RingDetector.RingGlyph ring,
-            int maxCalls,
-            ParseDetail detail) {
-        return selectInternal(candidates, ring, maxCalls, detail, false);
+        return selectInternal(candidates, ring, maxCalls, detail);
     }
 
     private static SelectedSymbols selectInternal(
             List<SymbolCandidate> candidates,
             RingDetector.RingGlyph ring,
             int maxCalls,
-            ParseDetail detail,
-            boolean usePreparedRecognition) {
+            ParseDetail detail) {
         int calls = 0;
         boolean recognitionBudgetExhausted = false;
         int unevaluatedCandidateCount = 0;
@@ -107,23 +99,17 @@ public class SelectionEngine {
                 unevaluatedCandidateCount = candidates.size() - candidateIndex;
                 break;
             }
-            PointCloudRecognizer.PreparedCandidate prepared = usePreparedRecognition
-                    ? PointCloudRecognizer.prepareCandidate(cand.strokes())
-                    : null;
-            PointCloudRecognizer.RotationWorkspace workspace = usePreparedRecognition
-                    ? prepared.newWorkspace()
-                    : null;
+            PointCloudRecognizer.PreparedCandidate prepared =
+                    PointCloudRecognizer.prepareCandidate(cand.strokes());
+            PointCloudRecognizer.RotationWorkspace workspace = prepared.newWorkspace();
             
             SymbolRecognitionResult sigilRes = null;
             double sigilScore = 0;
             double sigilRoleScore = 0;
             
             if (likelySigil) {
-                sigilRes = usePreparedRecognition
-                        ? PointCloudRecognizer.recognizePrepared(
-                                prepared, 0.0, SymbolKind.SIGIL, detail, workspace)
-                        : PointCloudRecognizer.recognizeReference(
-                                cand.strokes(), SymbolKind.SIGIL, detail);
+                sigilRes = PointCloudRecognizer.recognizePrepared(
+                        prepared, 0.0, SymbolKind.SIGIL, detail, workspace);
                 calls++;
                 sigilScore = sigilRes.score();
                 double centralityScore = 1.0 - clamp(cand.radialPosition() / 0.70);
@@ -144,16 +130,8 @@ public class SelectionEngine {
                     double angleToTest = (baseAngle + offset) % 360;
                     if (angleToTest < 0) angleToTest += 360;
                     
-                    SymbolRecognitionResult res;
-                    if (usePreparedRecognition) {
-                        res = PointCloudRecognizer.recognizePrepared(
-                                prepared, angleToTest, SymbolKind.SIGN, detail, workspace);
-                    } else {
-                        List<List<Point>> rotatedStrokes = rotateStrokes(
-                                cand.strokes(), cand.centroid(), angleToTest);
-                        res = PointCloudRecognizer.recognizeReference(
-                                rotatedStrokes, SymbolKind.SIGN, detail);
-                    }
+                    SymbolRecognitionResult res = PointCloudRecognizer.recognizePrepared(
+                            prepared, angleToTest, SymbolKind.SIGN, detail, workspace);
                     calls++;
                     
                     if (bestSignRes == null || res.score() > bestSignScore) {
@@ -478,24 +456,6 @@ public class SelectionEngine {
     
     private static double clamp(double v) {
         return Math.max(0, Math.min(1, v));
-    }
-    
-    private static List<List<Point>> rotateStrokes(List<List<Point>> strokes, Point centroid, double angleDeg) {
-        List<List<Point>> rotatedStrokes = new ArrayList<>();
-        double rad = Math.toRadians(angleDeg);
-        double cos = Math.cos(rad);
-        double sin = Math.sin(rad);
-        
-        for (List<Point> stroke : strokes) {
-            List<Point> rotated = new ArrayList<>();
-            for (Point p : stroke) {
-                double rx = (p.x - centroid.x) * cos - (p.y - centroid.y) * sin + centroid.x;
-                double ry = (p.x - centroid.x) * sin + (p.y - centroid.y) * cos + centroid.y;
-                rotated.add(new Point(rx, ry));
-            }
-            rotatedStrokes.add(rotated);
-        }
-        return rotatedStrokes;
     }
     
     /** Diagnostic data for a single evaluated candidate. */

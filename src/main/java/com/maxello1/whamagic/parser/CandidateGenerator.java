@@ -7,13 +7,13 @@ import com.maxello1.whamagic.magic.RingDetector;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Set;
-import java.util.HashSet;
 
-public class CandidateGenerator {
+public final class CandidateGenerator {
 
     private static final double DIRECT_STROKE_PROXIMITY = 0.06;
     private static final int MAX_BITMASK_PRIMITIVE_GROUPS = 16;
+
+    private CandidateGenerator() {}
 
     /** Result of candidate generation, including diagnostic data. */
     public record GenerationResult(
@@ -44,11 +44,12 @@ public class CandidateGenerator {
             throw new IllegalArgumentException("Candidate generation supports at most "
                     + MAX_BITMASK_PRIMITIVE_GROUPS + " primitive groups");
         }
+        int allGroupsMask = n == 0 ? 0 : (1 << n) - 1;
 
         // Insert the all-strokes super-candidate first so it cannot be displaced by
         // the bounded sub-candidate search.
         if (n > 1) {
-            SymbolCandidate allStrokesCandidate = buildCandidate(new ArrayList<>(primitives), ring, 0)
+            SymbolCandidate allStrokesCandidate = buildCandidate(primitives, allGroupsMask, ring, 0)
                     .withSuperCandidate();
             if (isValidSuperCandidate(allStrokesCandidate, ring)) {
                 if (candidates.size() < settings.maxCandidates()) {
@@ -62,7 +63,6 @@ public class CandidateGenerator {
         int[] adjacencyMasks = buildGroupAdjacencyMasks(primitives, ring, settings);
         CandidateSearchState search = new CandidateSearchState(candidates, limitReached);
         int maxK = Math.min(n, settings.maxGroupsPerCandidate());
-        int allGroupsMask = n == 0 ? 0 : (1 << n) - 1;
         for (int k = 1; k <= maxK; k++) {
             if (!streamConnectedCandidates(
                     primitives,
@@ -80,74 +80,6 @@ public class CandidateGenerator {
         }
 
         return new GenerationResult(primitives, candidates, search.limitReached,
-                List.copyOf(droppedSourceStrokeIndices));
-    }
-
-    /**
-     * Allocation-heavy compatibility oracle retained only for focused equivalence
-     * tests. Production candidate generation uses the streaming bitmask path above.
-     */
-    static GenerationResult generateCandidatesReference(
-            List<IndexedStroke> strokes,
-            RingDetector.RingGlyph ring,
-            CandidateGenerationSettings settings) {
-        List<PrimitiveStrokeGroup> primitives = groupPrimitives(strokes, ring, settings);
-
-        boolean limitReached = false;
-        List<Integer> droppedSourceStrokeIndices = new ArrayList<>();
-        if (primitives.size() > settings.maxPrimitiveGroups()) {
-            primitives.sort((a, b) -> Double.compare(b.pathLength(), a.pathLength()));
-            for (PrimitiveStrokeGroup dropped : primitives.subList(settings.maxPrimitiveGroups(), primitives.size())) {
-                droppedSourceStrokeIndices.addAll(dropped.sourceStrokeIndices());
-            }
-            primitives = new ArrayList<>(primitives.subList(0, settings.maxPrimitiveGroups()));
-            limitReached = true;
-        }
-
-        Collections.sort(droppedSourceStrokeIndices);
-        List<SymbolCandidate> candidates = new ArrayList<>();
-        int n = primitives.size();
-        
-        // Insert the all-strokes super-candidate FIRST so it is always tested.
-        // Uses relaxed geometric limits compared to normal sub-candidates.
-        if (n > 1) {
-            SymbolCandidate allStrokesCandidate = buildCandidate(new ArrayList<>(primitives), ring, 0)
-                    .withSuperCandidate();
-            if (isValidSuperCandidate(allStrokesCandidate, ring)) {
-                if (candidates.size() < settings.maxCandidates()) {
-                    candidates.add(allStrokesCandidate);
-                } else {
-                    limitReached = true;
-                }
-            }
-        }
-        
-        // Build proximity adjacency to avoid combining distant groups
-        boolean[][] adjacentGroups = buildGroupAdjacency(primitives, ring, settings);
-        
-        int maxK = Math.min(n, settings.maxGroupsPerCandidate());
-        candidateSearch:
-        for (int k = 1; k <= maxK; k++) {
-            List<List<PrimitiveStrokeGroup>> combos = new ArrayList<>();
-            generateConnectedCombinations(primitives, adjacentGroups, k, 0, new ArrayList<>(), new HashSet<>(), combos);
-            for (List<PrimitiveStrokeGroup> combo : combos) {
-                // Skip if it duplicates the all-strokes candidate.
-                if (n > 1 && combo.size() == primitives.size()) continue;
-
-                SymbolCandidate cand = buildCandidate(combo, ring, candidates.size());
-                if (isValidCandidate(cand, ring, settings)) {
-                    // Equality with the cap is not exhaustion. The search becomes
-                    // incomplete only when a valid candidate must be omitted.
-                    if (candidates.size() >= settings.maxCandidates()) {
-                        limitReached = true;
-                        break candidateSearch;
-                    }
-                    candidates.add(cand);
-                }
-            }
-        }
-
-        return new GenerationResult(primitives, candidates, limitReached,
                 List.copyOf(droppedSourceStrokeIndices));
     }
 
@@ -217,41 +149,6 @@ public class CandidateGenerator {
     }
     
     /**
-     * Generate combinations of groups where at least one group in the combination
-     * is adjacent to at least one other group already in the combination.
-     * This prevents combining spatially distant groups.
-     */
-    private static void generateConnectedCombinations(
-            List<PrimitiveStrokeGroup> primitives, boolean[][] adjacent,
-            int k, int start, List<PrimitiveStrokeGroup> current, 
-            Set<Integer> currentIndices, List<List<PrimitiveStrokeGroup>> result) {
-        if (current.size() == k) {
-            result.add(new ArrayList<>(current));
-            return;
-        }
-        for (int i = start; i < primitives.size(); i++) {
-            // For k=1, allow any single group
-            // For k>1, the new group must be adjacent to at least one group already selected
-            if (!current.isEmpty()) {
-                boolean hasAdjacentNeighbor = false;
-                for (int existing : currentIndices) {
-                    if (adjacent[existing][i]) {
-                        hasAdjacentNeighbor = true;
-                        break;
-                    }
-                }
-                if (!hasAdjacentNeighbor) continue;
-            }
-            
-            current.add(primitives.get(i));
-            currentIndices.add(i);
-            generateConnectedCombinations(primitives, adjacent, k, i + 1, current, currentIndices, result);
-            current.remove(current.size() - 1);
-            currentIndices.remove(i);
-        }
-    }
-    
-    /**
      * Build adjacency matrix between primitive groups based on spatial proximity.
      * Two groups are adjacent if their centroids, bounds, or endpoints are close enough.
      */
@@ -299,55 +196,6 @@ public class CandidateGenerator {
         return masks;
     }
 
-    private static boolean[][] buildGroupAdjacency(List<PrimitiveStrokeGroup> groups, RingDetector.RingGlyph ring, CandidateGenerationSettings settings) {
-        int n = groups.size();
-        boolean[][] adj = new boolean[n][n];
-        
-        // Reference dimension: ring diameter or canvas size
-        double refSize = ring != null ? ring.radius() * 2 : 1.0;
-        double maxGap = refSize * settings.maxInternalGapRatio();
-        double maxGapSq = maxGap * maxGap;
-        
-        for (int i = 0; i < n; i++) {
-            adj[i][i] = true;
-            for (int j = i + 1; j < n; j++) {
-                PrimitiveStrokeGroup a = groups.get(i);
-                PrimitiveStrokeGroup b = groups.get(j);
-                
-                // Check bounds proximity (expanded bounds overlap)
-                boolean boundsClose = boundsOverlapOrClose(a.bounds(), b.bounds(), maxGap);
-                
-                // Check centroid distance
-                double centroidDistSq = distSq(a.centroid(), b.centroid());
-                boolean centroidClose = centroidDistSq < maxGapSq * 4;
-                
-                // Check endpoint proximity (closest stroke endpoints)
-                boolean endpointClose = checkEndpointProximity(a.strokes(), b.strokes(), maxGapSq);
-                
-                // Check angular proximity (for ring-based layouts)
-                boolean angularClose = true;
-                if (ring != null) {
-                    double angleDiff = Math.abs(a.angularPosition() - b.angularPosition());
-                    if (angleDiff > 180) angleDiff = 360 - angleDiff;
-                    // Two groups on opposite sides of the ring should not be combined
-                    angularClose = angleDiff < settings.maxAngularSpanDeg() * 0.6;
-                }
-                
-                // Require at least two proximity measures to agree
-                int proximity = 0;
-                if (boundsClose) proximity++;
-                if (centroidClose) proximity++;
-                if (endpointClose) proximity++;
-                if (angularClose) proximity++;
-                
-                adj[i][j] = proximity >= 2;
-                adj[j][i] = adj[i][j];
-            }
-        }
-        
-        return adj;
-    }
-    
     /** Check if two bounding boxes overlap or are within maxGap of each other. */
     private static boolean boundsOverlapOrClose(BoundingBox a, BoundingBox b, double maxGap) {
         return a.minX() - maxGap <= b.maxX() && b.minX() - maxGap <= a.maxX() &&
@@ -578,64 +426,6 @@ public class CandidateGenerator {
         }
     }
     
-    private static SymbolCandidate buildCandidate(List<PrimitiveStrokeGroup> groups, RingDetector.RingGlyph ring, int candId) {
-        List<List<Point>> allStrokes = new ArrayList<>();
-        List<Integer> primitiveIds = new ArrayList<>();
-        List<Integer> sourceIndices = new ArrayList<>();
-        
-        double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE;
-        double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
-        double cx = 0, cy = 0;
-        int totalPoints = 0;
-        
-        for (PrimitiveStrokeGroup g : groups) {
-            primitiveIds.add(g.id());
-            for (List<Point> s : g.strokes()) {
-                allStrokes.add(s);
-                for (Point p : s) {
-                    if (p.x < minX) minX = p.x;
-                    if (p.y < minY) minY = p.y;
-                    if (p.x > maxX) maxX = p.x;
-                    if (p.y > maxY) maxY = p.y;
-                    cx += p.x;
-                    cy += p.y;
-                    totalPoints++;
-                }
-            }
-            sourceIndices.addAll(g.sourceStrokeIndices());
-        }
-        
-        cx /= totalPoints;
-        cy /= totalPoints;
-        
-        double angleAroundRing = 0;
-        double radiusNorm = 0;
-        if (ring != null) {
-            double angle = Math.toDegrees(Math.atan2(cy - ring.center().y, cx - ring.center().x));
-            angleAroundRing = angle < 0 ? angle + 360 : angle;
-            double r = Math.hypot(cx - ring.center().x, cy - ring.center().y);
-            radiusNorm = r / ring.radius();
-        }
-        
-        double angularSpan = 0;
-        if (ring != null && groups.size() > 1) {
-            double minAngle = Double.MAX_VALUE;
-            double maxAngle = -Double.MAX_VALUE;
-            for (PrimitiveStrokeGroup g : groups) {
-                double a = g.angularPosition();
-                double diff = a - angleAroundRing;
-                while (diff > 180) diff -= 360;
-                while (diff < -180) diff += 360;
-                if (diff < minAngle) minAngle = diff;
-                if (diff > maxAngle) maxAngle = diff;
-            }
-            angularSpan = maxAngle - minAngle;
-        }
-        
-        BoundingBox bounds = new BoundingBox(minX, minY, maxX, maxY);
-        return new SymbolCandidate(candId, primitiveIds, sourceIndices, allStrokes, bounds, new Point(cx, cy), radiusNorm, angleAroundRing, angularSpan);
-    }
-
     private static SymbolCandidate buildCandidate(
             List<PrimitiveStrokeGroup> groups,
             int selectedMask,

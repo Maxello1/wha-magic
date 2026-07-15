@@ -73,10 +73,11 @@ class DrawingEditorStateTest {
                     new Point(coordinate + 0.02, coordinate + 0.02)));
         }
 
-        assertEquals(2, editor.undoHistorySize());
         assertTrue(editor.undo());
         assertTrue(editor.undo());
         assertFalse(editor.undo());
-        assertEquals(2, editor.redoHistorySize());
+        assertTrue(editor.redo());
+        assertTrue(editor.redo());
+        assertFalse(editor.redo());
     }
 }
