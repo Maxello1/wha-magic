@@ -1,5 +1,6 @@
 package com.maxello1.whamagic.magic;
 
+import com.maxello1.whamagic.parser.BoundingBox;
 import com.maxello1.whamagic.parser.Point;
 import com.maxello1.whamagic.parser.PointCloudRecognizer;
 import com.maxello1.whamagic.parser.SpellDictionary;
@@ -16,25 +17,21 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HexFormat;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /** Persistent, server-authoritative compiled representation of a saved spell. */
 public record StoredSpell(
         int formatVersion,
         SpellState state,
-        List<ElementType> elements,
-        Map<Identifier, Integer> signCounts,
-        SigilSemantic sigilSemantic,
-        List<SignSemantic> signSemantics,
+        List<CompiledSigil> compiledSigils,
+        List<CompiledSign> compiledSigns,
+        SpellGeometry geometry,
         String displayName,
         int strokeHash,
         String dictionaryVersion,
@@ -42,7 +39,18 @@ public record StoredSpell(
         String recognizerVersion,
         String authoritySignature
 ) {
-    public static final int FORMAT_VERSION = 2;
+    public static final int FORMAT_VERSION = 3;
+
+    private static final int MAX_COMPILED_SYMBOLS = CandidateGenerationSettings.DEFAULTS.maxCandidates();
+    private static final int MAX_SOURCE_STROKES = 256;
+    private static final double MIN_NORMALIZED_COORDINATE = -0.25;
+    private static final double MAX_NORMALIZED_COORDINATE = 1.25;
+    private static final double MIN_RING_RADIUS = 0.08;
+    private static final double MAX_RING_RADIUS = 0.80;
+    private static final double MAX_NORMALIZED_RADIAL_POSITION = 32.0;
+    private static final double MAX_DIRECTIONAL_BIAS_MAGNITUDE = 1.0;
+    private static final double DERIVED_VALUE_TOLERANCE = 1.0e-9;
+
     private static final String AUTHORITY_ALGORITHM = "HmacSHA256";
     private static final byte[] AUTHORITY_KEY = createAuthorityKey();
     private static final ThreadLocal<Mac> AUTHORITY_MAC = ThreadLocal.withInitial(() -> {
@@ -56,24 +64,25 @@ public record StoredSpell(
     });
 
     private static final Codec<SpellState> SPELL_STATE_CODEC = Codec.STRING.comapFlatMap(
-            value -> {
-                try {
-                    return DataResult.success(SpellState.valueOf(value.toUpperCase(Locale.ROOT)));
-                } catch (IllegalArgumentException exception) {
-                    return DataResult.error(() -> "Unknown spell state: " + value);
-                }
-            },
+            value -> enumValue(SpellState.class, value, "spell state"),
             state -> state.name().toLowerCase(Locale.ROOT));
 
     private static final Codec<ElementType> ELEMENT_TYPE_CODEC = Codec.STRING.comapFlatMap(
-            value -> {
-                try {
-                    return DataResult.success(ElementType.valueOf(value.toUpperCase(Locale.ROOT)));
-                } catch (IllegalArgumentException exception) {
-                    return DataResult.error(() -> "Unknown element: " + value);
-                }
-            },
+            value -> enumValue(ElementType.class, value, "element"),
             element -> element.name().toLowerCase(Locale.ROOT));
+
+    private static final Codec<SpellLayer> SPELL_LAYER_CODEC = Codec.STRING.comapFlatMap(
+            value -> enumValue(SpellLayer.class, value, "spell layer"),
+            layer -> layer.name().toLowerCase(Locale.ROOT));
+
+    private static final Codec<Identifier> IDENTIFIER_CODEC = Codec.STRING.comapFlatMap(
+            value -> {
+                Identifier identifier = Identifier.tryParse(value);
+                return identifier == null
+                        ? DataResult.error(() -> "Invalid identifier: " + value)
+                        : DataResult.success(identifier);
+            },
+            Identifier::toString);
 
     private static final Codec<SigilSemantic> SIGIL_SEMANTIC_CODEC = RecordCodecBuilder.create(instance ->
             instance.group(
@@ -97,51 +106,150 @@ public record StoredSpell(
                     Codec.DOUBLE.optionalFieldOf("lifetimeBias", 0.0).forGetter(SignSemantic::lifetimeBias)
             ).apply(instance, SignSemantic::new));
 
+    private static final Codec<BoundingBox> BOUNDING_BOX_CODEC = RecordCodecBuilder.create(instance ->
+            instance.group(
+                    Codec.DOUBLE.fieldOf("minX").forGetter(BoundingBox::minX),
+                    Codec.DOUBLE.fieldOf("minY").forGetter(BoundingBox::minY),
+                    Codec.DOUBLE.fieldOf("maxX").forGetter(BoundingBox::maxX),
+                    Codec.DOUBLE.fieldOf("maxY").forGetter(BoundingBox::maxY)
+            ).apply(instance, BoundingBox::new));
+
+    private static final Codec<CompiledSigil> COMPILED_SIGIL_CODEC = RecordCodecBuilder.create(instance ->
+            instance.group(
+                    IDENTIFIER_CODEC.fieldOf("semanticId").forGetter(CompiledSigil::semanticId),
+                    Codec.STRING.fieldOf("matchedTemplateId").forGetter(CompiledSigil::matchedTemplateId),
+                    Codec.STRING.fieldOf("displayName").forGetter(CompiledSigil::displayName),
+                    ELEMENT_TYPE_CODEC.fieldOf("element").forGetter(CompiledSigil::element),
+                    SIGIL_SEMANTIC_CODEC.fieldOf("semantic").forGetter(CompiledSigil::semantic),
+                    Codec.DOUBLE.fieldOf("recognitionConfidence").forGetter(CompiledSigil::recognitionConfidence),
+                    Point.CODEC.fieldOf("centroid").forGetter(CompiledSigil::centroid),
+                    BOUNDING_BOX_CODEC.fieldOf("bounds").forGetter(CompiledSigil::bounds),
+                    Codec.DOUBLE.fieldOf("orientationDegrees").forGetter(CompiledSigil::orientationDegrees),
+                    Codec.list(Codec.INT).fieldOf("sourceStrokeIndices").forGetter(CompiledSigil::sourceStrokeIndices)
+            ).apply(instance, CompiledSigil::new));
+
+    private static final Codec<CompiledSign> COMPILED_SIGN_CODEC = RecordCodecBuilder.create(instance ->
+            instance.group(
+                    IDENTIFIER_CODEC.fieldOf("semanticId").forGetter(CompiledSign::semanticId),
+                    Codec.STRING.fieldOf("matchedTemplateId").forGetter(CompiledSign::matchedTemplateId),
+                    SIGN_SEMANTIC_CODEC.fieldOf("semantic").forGetter(CompiledSign::semantic),
+                    Codec.DOUBLE.fieldOf("confidence").forGetter(CompiledSign::confidence),
+                    Codec.DOUBLE.fieldOf("angleAroundRing").forGetter(CompiledSign::angleAroundRing),
+                    Codec.DOUBLE.fieldOf("orientationDegrees").forGetter(CompiledSign::orientationDegrees),
+                    Codec.DOUBLE.fieldOf("radialPosition").forGetter(CompiledSign::radialPosition),
+                    SPELL_LAYER_CODEC.fieldOf("layer").forGetter(CompiledSign::layer),
+                    Point.CODEC.fieldOf("centroid").forGetter(CompiledSign::centroid),
+                    BOUNDING_BOX_CODEC.fieldOf("bounds").forGetter(CompiledSign::bounds),
+                    Codec.list(Codec.INT).fieldOf("sourceStrokeIndices").forGetter(CompiledSign::sourceStrokeIndices),
+                    Codec.BOOL.fieldOf("reversed").forGetter(CompiledSign::reversed)
+            ).apply(instance, CompiledSign::new));
+
+    private static final Codec<SpellGeometry> SPELL_GEOMETRY_CODEC = RecordCodecBuilder.create(instance ->
+            instance.group(
+                    Point.CODEC.fieldOf("ringCenter").forGetter(SpellGeometry::ringCenter),
+                    Codec.DOUBLE.fieldOf("ringRadius").forGetter(SpellGeometry::ringRadius),
+                    Codec.DOUBLE.fieldOf("ringArea").forGetter(SpellGeometry::ringArea),
+                    Codec.DOUBLE.fieldOf("normalizedRingDiameter").forGetter(SpellGeometry::normalizedRingDiameter),
+                    Codec.DOUBLE.fieldOf("ringCompleteness").forGetter(SpellGeometry::ringCompleteness),
+                    Codec.DOUBLE.fieldOf("ringCircularity").forGetter(SpellGeometry::ringCircularity),
+                    Codec.DOUBLE.fieldOf("ringNormalizedRmse").forGetter(SpellGeometry::ringNormalizedRmse),
+                    Point.CODEC.fieldOf("directionalBias").forGetter(SpellGeometry::directionalBias),
+                    Codec.DOUBLE.fieldOf("radialSymmetryScore").forGetter(SpellGeometry::radialSymmetryScore),
+                    Codec.DOUBLE.fieldOf("bilateralSymmetryScore").forGetter(SpellGeometry::bilateralSymmetryScore),
+                    Codec.DOUBLE.fieldOf("signBalanceScore").forGetter(SpellGeometry::signBalanceScore)
+            ).apply(instance, SpellGeometry::new));
+
     /**
-     * One tolerant storage shape decodes both historical component layouts and v2.
-     * Legacy sign keys remain strings until migration so malformed IDs can be ignored safely.
+     * The legacy aggregate fields exist only to keep historical components decodable.
+     * They are intentionally discarded instead of being promoted into incomplete v3 geometry.
      */
     private record PersistedSpell(
             int formatVersion,
             SpellState state,
-            List<ElementType> elements,
-            String legacyElement,
-            Map<String, Integer> signCounts,
-            Optional<SigilSemantic> sigilSemantic,
-            List<SignSemantic> signSemantics,
+            List<CompiledSigil> compiledSigils,
+            List<CompiledSign> compiledSigns,
+            Optional<SpellGeometry> geometry,
             String displayName,
             int strokeHash,
             String dictionaryVersion,
             String dictionaryHash,
             String recognizerVersion,
-            String authoritySignature
+            String authoritySignature,
+            List<ElementType> legacyElements,
+            String legacyElement,
+            Map<String, Integer> legacySignCounts,
+            Optional<SigilSemantic> legacySigilSemantic,
+            List<SignSemantic> legacySignSemantics
     ) {}
 
     private static final Codec<PersistedSpell> PERSISTED_CODEC = RecordCodecBuilder.create(instance ->
             instance.group(
                     Codec.INT.optionalFieldOf("formatVersion", 0).forGetter(PersistedSpell::formatVersion),
                     SPELL_STATE_CODEC.fieldOf("state").forGetter(PersistedSpell::state),
-                    Codec.list(ELEMENT_TYPE_CODEC).optionalFieldOf("elements", List.of())
-                            .forGetter(PersistedSpell::elements),
-                    Codec.STRING.optionalFieldOf("element", "").forGetter(PersistedSpell::legacyElement),
-                    Codec.unboundedMap(Codec.STRING, Codec.INT).optionalFieldOf("signCounts", Map.of())
-                            .forGetter(PersistedSpell::signCounts),
-                    SIGIL_SEMANTIC_CODEC.optionalFieldOf("sigilSemantic")
-                            .forGetter(PersistedSpell::sigilSemantic),
-                    Codec.list(SIGN_SEMANTIC_CODEC).optionalFieldOf("signSemantics", List.of())
-                            .forGetter(PersistedSpell::signSemantics),
+                    Codec.list(COMPILED_SIGIL_CODEC).optionalFieldOf("compiledSigils", List.of())
+                            .forGetter(PersistedSpell::compiledSigils),
+                    Codec.list(COMPILED_SIGN_CODEC).optionalFieldOf("compiledSigns", List.of())
+                            .forGetter(PersistedSpell::compiledSigns),
+                    SPELL_GEOMETRY_CODEC.optionalFieldOf("geometry").forGetter(PersistedSpell::geometry),
                     Codec.STRING.optionalFieldOf("displayName", "").forGetter(PersistedSpell::displayName),
                     Codec.INT.fieldOf("strokeHash").forGetter(PersistedSpell::strokeHash),
-                    Codec.STRING.optionalFieldOf("dictionaryVersion", "").forGetter(PersistedSpell::dictionaryVersion),
+                    Codec.STRING.optionalFieldOf("dictionaryVersion", "")
+                            .forGetter(PersistedSpell::dictionaryVersion),
                     Codec.STRING.optionalFieldOf("dictionaryHash", "").forGetter(PersistedSpell::dictionaryHash),
-                    Codec.STRING.optionalFieldOf("recognizerVersion", "").forGetter(PersistedSpell::recognizerVersion),
+                    Codec.STRING.optionalFieldOf("recognizerVersion", "")
+                            .forGetter(PersistedSpell::recognizerVersion),
                     Codec.STRING.optionalFieldOf("authoritySignature", "")
-                            .forGetter(PersistedSpell::authoritySignature)
+                            .forGetter(PersistedSpell::authoritySignature),
+                    Codec.list(ELEMENT_TYPE_CODEC).optionalFieldOf("elements", List.of())
+                            .forGetter(PersistedSpell::legacyElements),
+                    Codec.STRING.optionalFieldOf("element", "").forGetter(PersistedSpell::legacyElement),
+                    Codec.unboundedMap(Codec.STRING, Codec.INT).optionalFieldOf("signCounts", Map.of())
+                            .forGetter(PersistedSpell::legacySignCounts),
+                    SIGIL_SEMANTIC_CODEC.optionalFieldOf("sigilSemantic")
+                            .forGetter(PersistedSpell::legacySigilSemantic),
+                    Codec.list(SIGN_SEMANTIC_CODEC).optionalFieldOf("signSemantics", List.of())
+                            .forGetter(PersistedSpell::legacySignSemantics)
             ).apply(instance, PersistedSpell::new));
 
-    public static final Codec<StoredSpell> CODEC = PERSISTED_CODEC.xmap(
-            StoredSpell::fromPersisted,
-            StoredSpell::toPersisted);
+    public static final Codec<StoredSpell> CODEC = PERSISTED_CODEC.flatXmap(
+            StoredSpell::decodePersisted,
+            StoredSpell::encodePersisted);
+
+    private static final StreamCodec<RegistryFriendlyByteBuf, Point> EXACT_POINT_STREAM_CODEC =
+            new StreamCodec<>() {
+                @Override
+                public Point decode(RegistryFriendlyByteBuf buffer) {
+                    return new Point(
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer));
+                }
+
+                @Override
+                public void encode(RegistryFriendlyByteBuf buffer, Point point) {
+                    ByteBufCodecs.DOUBLE.encode(buffer, point.x);
+                    ByteBufCodecs.DOUBLE.encode(buffer, point.y);
+                }
+            };
+
+    private static final StreamCodec<RegistryFriendlyByteBuf, BoundingBox> BOUNDING_BOX_STREAM_CODEC =
+            new StreamCodec<>() {
+                @Override
+                public BoundingBox decode(RegistryFriendlyByteBuf buffer) {
+                    return new BoundingBox(
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer));
+                }
+
+                @Override
+                public void encode(RegistryFriendlyByteBuf buffer, BoundingBox bounds) {
+                    ByteBufCodecs.DOUBLE.encode(buffer, bounds.minX());
+                    ByteBufCodecs.DOUBLE.encode(buffer, bounds.minY());
+                    ByteBufCodecs.DOUBLE.encode(buffer, bounds.maxX());
+                    ByteBufCodecs.DOUBLE.encode(buffer, bounds.maxY());
+                }
+            };
 
     private static final StreamCodec<RegistryFriendlyByteBuf, SigilSemantic> SIGIL_SEMANTIC_STREAM_CODEC =
             new StreamCodec<>() {
@@ -191,59 +299,154 @@ public record StoredSpell(
                 }
             };
 
+    private static final StreamCodec<RegistryFriendlyByteBuf, CompiledSigil> COMPILED_SIGIL_STREAM_CODEC =
+            new StreamCodec<>() {
+                @Override
+                public CompiledSigil decode(RegistryFriendlyByteBuf buffer) {
+                    return new CompiledSigil(
+                            Identifier.STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.STRING_UTF8.decode(buffer),
+                            ByteBufCodecs.STRING_UTF8.decode(buffer),
+                            decodeEnum(buffer, ElementType.class),
+                            SIGIL_SEMANTIC_STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            EXACT_POINT_STREAM_CODEC.decode(buffer),
+                            BOUNDING_BOX_STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.collection(ArrayList::new, ByteBufCodecs.VAR_INT).decode(buffer));
+                }
+
+                @Override
+                public void encode(RegistryFriendlyByteBuf buffer, CompiledSigil sigil) {
+                    Identifier.STREAM_CODEC.encode(buffer, sigil.semanticId());
+                    ByteBufCodecs.STRING_UTF8.encode(buffer, sigil.matchedTemplateId());
+                    ByteBufCodecs.STRING_UTF8.encode(buffer, sigil.displayName());
+                    encodeEnum(buffer, sigil.element());
+                    SIGIL_SEMANTIC_STREAM_CODEC.encode(buffer, sigil.semantic());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sigil.recognitionConfidence());
+                    EXACT_POINT_STREAM_CODEC.encode(buffer, sigil.centroid());
+                    BOUNDING_BOX_STREAM_CODEC.encode(buffer, sigil.bounds());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sigil.orientationDegrees());
+                    ByteBufCodecs.collection(ArrayList::new, ByteBufCodecs.VAR_INT)
+                            .encode(buffer, new ArrayList<>(sigil.sourceStrokeIndices()));
+                }
+            };
+
+    private static final StreamCodec<RegistryFriendlyByteBuf, CompiledSign> COMPILED_SIGN_STREAM_CODEC =
+            new StreamCodec<>() {
+                @Override
+                public CompiledSign decode(RegistryFriendlyByteBuf buffer) {
+                    return new CompiledSign(
+                            Identifier.STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.STRING_UTF8.decode(buffer),
+                            SIGN_SEMANTIC_STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            decodeEnum(buffer, SpellLayer.class),
+                            EXACT_POINT_STREAM_CODEC.decode(buffer),
+                            BOUNDING_BOX_STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.collection(ArrayList::new, ByteBufCodecs.VAR_INT).decode(buffer),
+                            ByteBufCodecs.BOOL.decode(buffer));
+                }
+
+                @Override
+                public void encode(RegistryFriendlyByteBuf buffer, CompiledSign sign) {
+                    Identifier.STREAM_CODEC.encode(buffer, sign.semanticId());
+                    ByteBufCodecs.STRING_UTF8.encode(buffer, sign.matchedTemplateId());
+                    SIGN_SEMANTIC_STREAM_CODEC.encode(buffer, sign.semantic());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sign.confidence());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sign.angleAroundRing());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sign.orientationDegrees());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sign.radialPosition());
+                    encodeEnum(buffer, sign.layer());
+                    EXACT_POINT_STREAM_CODEC.encode(buffer, sign.centroid());
+                    BOUNDING_BOX_STREAM_CODEC.encode(buffer, sign.bounds());
+                    ByteBufCodecs.collection(ArrayList::new, ByteBufCodecs.VAR_INT)
+                            .encode(buffer, new ArrayList<>(sign.sourceStrokeIndices()));
+                    ByteBufCodecs.BOOL.encode(buffer, sign.reversed());
+                }
+            };
+
+    private static final StreamCodec<RegistryFriendlyByteBuf, SpellGeometry> SPELL_GEOMETRY_STREAM_CODEC =
+            new StreamCodec<>() {
+                @Override
+                public SpellGeometry decode(RegistryFriendlyByteBuf buffer) {
+                    return new SpellGeometry(
+                            EXACT_POINT_STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            EXACT_POINT_STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer));
+                }
+
+                @Override
+                public void encode(RegistryFriendlyByteBuf buffer, SpellGeometry geometry) {
+                    EXACT_POINT_STREAM_CODEC.encode(buffer, geometry.ringCenter());
+                    ByteBufCodecs.DOUBLE.encode(buffer, geometry.ringRadius());
+                    ByteBufCodecs.DOUBLE.encode(buffer, geometry.ringArea());
+                    ByteBufCodecs.DOUBLE.encode(buffer, geometry.normalizedRingDiameter());
+                    ByteBufCodecs.DOUBLE.encode(buffer, geometry.ringCompleteness());
+                    ByteBufCodecs.DOUBLE.encode(buffer, geometry.ringCircularity());
+                    ByteBufCodecs.DOUBLE.encode(buffer, geometry.ringNormalizedRmse());
+                    EXACT_POINT_STREAM_CODEC.encode(buffer, geometry.directionalBias());
+                    ByteBufCodecs.DOUBLE.encode(buffer, geometry.radialSymmetryScore());
+                    ByteBufCodecs.DOUBLE.encode(buffer, geometry.bilateralSymmetryScore());
+                    ByteBufCodecs.DOUBLE.encode(buffer, geometry.signBalanceScore());
+                }
+            };
+
     public static final StreamCodec<RegistryFriendlyByteBuf, StoredSpell> STREAM_CODEC =
             new StreamCodec<>() {
                 @Override
                 public StoredSpell decode(RegistryFriendlyByteBuf buffer) {
                     int formatVersion = ByteBufCodecs.VAR_INT.decode(buffer);
-                    SpellState state = SpellState.valueOf(
-                            ByteBufCodecs.STRING_UTF8.decode(buffer).toUpperCase(Locale.ROOT));
-                    List<ElementType> elements = ByteBufCodecs.collection(
-                            ArrayList::new,
-                            ByteBufCodecs.STRING_UTF8.map(
-                                    value -> ElementType.valueOf(value.toUpperCase(Locale.ROOT)),
-                                    element -> element.name().toLowerCase(Locale.ROOT)))
-                            .decode(buffer);
-                    Map<Identifier, Integer> signCounts = ByteBufCodecs.map(
-                            LinkedHashMap::new, Identifier.STREAM_CODEC, ByteBufCodecs.VAR_INT)
-                            .decode(buffer);
-                    SigilSemantic sigilSemantic = ByteBufCodecs.BOOL.decode(buffer)
-                            ? SIGIL_SEMANTIC_STREAM_CODEC.decode(buffer)
+                    SpellState state = decodeEnum(buffer, SpellState.class);
+                    List<CompiledSigil> compiledSigils = ByteBufCodecs.collection(
+                            ArrayList::new, COMPILED_SIGIL_STREAM_CODEC).decode(buffer);
+                    List<CompiledSign> compiledSigns = ByteBufCodecs.collection(
+                            ArrayList::new, COMPILED_SIGN_STREAM_CODEC).decode(buffer);
+                    SpellGeometry geometry = ByteBufCodecs.BOOL.decode(buffer)
+                            ? SPELL_GEOMETRY_STREAM_CODEC.decode(buffer)
                             : null;
-                    List<SignSemantic> signSemantics = ByteBufCodecs.collection(
-                            ArrayList::new, SIGN_SEMANTIC_STREAM_CODEC).decode(buffer);
-                    String displayName = ByteBufCodecs.STRING_UTF8.decode(buffer);
-                    int strokeHash = ByteBufCodecs.VAR_INT.decode(buffer);
-                    String dictionaryVersion = ByteBufCodecs.STRING_UTF8.decode(buffer);
-                    String dictionaryHash = ByteBufCodecs.STRING_UTF8.decode(buffer);
-                    String recognizerVersion = ByteBufCodecs.STRING_UTF8.decode(buffer);
-                    String authoritySignature = ByteBufCodecs.STRING_UTF8.decode(buffer);
-                    return new StoredSpell(
-                            formatVersion, state, elements, signCounts, sigilSemantic,
-                            signSemantics, displayName, strokeHash, dictionaryVersion,
-                            dictionaryHash, recognizerVersion, authoritySignature);
+                    StoredSpell spell = new StoredSpell(
+                            formatVersion,
+                            state,
+                            compiledSigils,
+                            compiledSigns,
+                            geometry,
+                            ByteBufCodecs.STRING_UTF8.decode(buffer),
+                            ByteBufCodecs.VAR_INT.decode(buffer),
+                            ByteBufCodecs.STRING_UTF8.decode(buffer),
+                            ByteBufCodecs.STRING_UTF8.decode(buffer),
+                            ByteBufCodecs.STRING_UTF8.decode(buffer),
+                            ByteBufCodecs.STRING_UTF8.decode(buffer));
+                    if (spell.formatVersion() == FORMAT_VERSION
+                            && !spell.hasStructurallyValidCurrentPayload(-1)) {
+                        throw new IllegalArgumentException("Malformed v3 stored-spell network payload");
+                    }
+                    return spell;
                 }
 
                 @Override
                 public void encode(RegistryFriendlyByteBuf buffer, StoredSpell spell) {
                     ByteBufCodecs.VAR_INT.encode(buffer, spell.formatVersion());
-                    ByteBufCodecs.STRING_UTF8.encode(
-                            buffer, spell.state().name().toLowerCase(Locale.ROOT));
-                    ByteBufCodecs.collection(
-                            ArrayList::new,
-                            ByteBufCodecs.STRING_UTF8.map(
-                                    value -> ElementType.valueOf(value.toUpperCase(Locale.ROOT)),
-                                    element -> element.name().toLowerCase(Locale.ROOT)))
-                            .encode(buffer, new ArrayList<>(spell.elements()));
-                    ByteBufCodecs.map(
-                            LinkedHashMap::new, Identifier.STREAM_CODEC, ByteBufCodecs.VAR_INT)
-                            .encode(buffer, new LinkedHashMap<>(spell.signCounts()));
-                    ByteBufCodecs.BOOL.encode(buffer, spell.sigilSemantic() != null);
-                    if (spell.sigilSemantic() != null) {
-                        SIGIL_SEMANTIC_STREAM_CODEC.encode(buffer, spell.sigilSemantic());
+                    encodeEnum(buffer, spell.state());
+                    ByteBufCodecs.collection(ArrayList::new, COMPILED_SIGIL_STREAM_CODEC)
+                            .encode(buffer, new ArrayList<>(spell.compiledSigils()));
+                    ByteBufCodecs.collection(ArrayList::new, COMPILED_SIGN_STREAM_CODEC)
+                            .encode(buffer, new ArrayList<>(spell.compiledSigns()));
+                    ByteBufCodecs.BOOL.encode(buffer, spell.geometry() != null);
+                    if (spell.geometry() != null) {
+                        SPELL_GEOMETRY_STREAM_CODEC.encode(buffer, spell.geometry());
                     }
-                    ByteBufCodecs.collection(ArrayList::new, SIGN_SEMANTIC_STREAM_CODEC)
-                            .encode(buffer, new ArrayList<>(spell.signSemantics()));
                     ByteBufCodecs.STRING_UTF8.encode(buffer, spell.displayName());
                     ByteBufCodecs.VAR_INT.encode(buffer, spell.strokeHash());
                     ByteBufCodecs.STRING_UTF8.encode(buffer, spell.dictionaryVersion());
@@ -255,11 +458,8 @@ public record StoredSpell(
 
     public StoredSpell {
         state = state == null ? SpellState.INVALID : state;
-        elements = elements == null ? List.of() : List.copyOf(elements);
-        signCounts = signCounts == null
-                ? Map.of()
-                : Collections.unmodifiableMap(new LinkedHashMap<>(signCounts));
-        signSemantics = signSemantics == null ? List.of() : List.copyOf(signSemantics);
+        compiledSigils = compiledSigils == null ? List.of() : List.copyOf(compiledSigils);
+        compiledSigns = compiledSigns == null ? List.of() : List.copyOf(compiledSigns);
         displayName = safeString(displayName);
         dictionaryVersion = safeString(dictionaryVersion);
         dictionaryHash = safeString(dictionaryHash);
@@ -275,10 +475,9 @@ public record StoredSpell(
         String authoritySignature = signCompiledPayload(
                 FORMAT_VERSION,
                 ir.state(),
-                ir.elements(),
-                ir.signCounts(),
-                ir.sigilSemantic(),
-                ir.signSemantics(),
+                ir.compiledSigils(),
+                ir.compiledSigns(),
+                ir.geometry(),
                 ir.displayName(),
                 strokeHash,
                 dictionary.version(),
@@ -287,10 +486,9 @@ public record StoredSpell(
         return new StoredSpell(
                 FORMAT_VERSION,
                 ir.state(),
-                ir.elements(),
-                ir.signCounts(),
-                ir.sigilSemantic(),
-                ir.signSemantics(),
+                ir.compiledSigils(),
+                ir.compiledSigns(),
+                ir.geometry(),
                 ir.displayName(),
                 strokeHash,
                 dictionary.version(),
@@ -301,22 +499,23 @@ public record StoredSpell(
 
     /** True only when every input that governs execution still matches. */
     public boolean isCurrentFor(List<List<Point>> strokes) {
+        if (formatVersion != FORMAT_VERSION) {
+            return false;
+        }
+        List<List<Point>> sourceStrokes = strokes == null ? List.of() : strokes;
         SpellDictionary.DictionarySnapshot dictionary = SpellDictionary.snapshot();
-        return formatVersion == FORMAT_VERSION
-                && state != null
-                && (state == SpellState.PREPARED || state == SpellState.ACTIVE)
-                && hasValidCompiledPayload(dictionary)
-                && strokeHash == computeStrokeHash(strokes)
+        return hasStructurallyValidCurrentPayload(sourceStrokes.size())
+                && hasKnownTemplates(dictionary)
+                && strokeHash == computeStrokeHash(sourceStrokes)
                 && dictionary.version().equals(dictionaryVersion)
                 && dictionary.hash().equals(dictionaryHash)
                 && PointCloudRecognizer.RECOGNIZER_VERSION.equals(recognizerVersion)
                 && authoritySignature.equals(signCompiledPayload(
                         formatVersion,
                         state,
-                        elements,
-                        signCounts,
-                        sigilSemantic,
-                        signSemantics,
+                        compiledSigils,
+                        compiledSigns,
+                        geometry,
                         displayName,
                         strokeHash,
                         dictionaryVersion,
@@ -324,40 +523,153 @@ public record StoredSpell(
                         recognizerVersion));
     }
 
-    private boolean hasValidCompiledPayload(SpellDictionary.DictionarySnapshot dictionary) {
-        if (elements.isEmpty()
-                || elements.size() > CandidateGenerationSettings.DEFAULTS.maxCandidates()
+    private boolean hasStructurallyValidCurrentPayload(int sourceStrokeCount) {
+        if ((state != SpellState.PREPARED && state != SpellState.ACTIVE)
+                || compiledSigils.isEmpty()
+                || compiledSigils.size() > MAX_COMPILED_SYMBOLS
+                || compiledSigns.size() > MAX_COMPILED_SYMBOLS
+                || compiledSigils.size() + compiledSigns.size() > MAX_COMPILED_SYMBOLS
                 || displayName.isBlank()
-                || !validSigilSemantic(sigilSemantic)) {
+                || dictionaryVersion.isBlank()
+                || dictionaryHash.isBlank()
+                || recognizerVersion.isBlank()
+                || !validAuthoritySignature(authoritySignature)
+                || !validGeometry(geometry)) {
             return false;
         }
 
-        Set<Identifier> knownSignIds = dictionary.templates().stream()
-                .filter(template -> template.kind() == SymbolKind.SIGN)
-                .map(template -> Identifier.tryParse(template.semanticId()))
-                .filter(java.util.Objects::nonNull)
-                .collect(Collectors.toUnmodifiableSet());
-        int signTotal = 0;
-        for (Map.Entry<Identifier, Integer> entry : signCounts.entrySet()) {
-            Integer count = entry.getValue();
-            if (!knownSignIds.contains(entry.getKey())
-                    || count == null
-                    || count <= 0
-                    || count > CandidateGenerationSettings.DEFAULTS.maxCandidates()) {
-                return false;
-            }
-            signTotal += count;
-            if (signTotal > CandidateGenerationSettings.DEFAULTS.maxCandidates()) {
+        for (CompiledSigil sigil : compiledSigils) {
+            if (!validCompiledSigil(sigil, sourceStrokeCount)) {
                 return false;
             }
         }
-        if (signSemantics.size() != signTotal) {
-            return false;
-        }
-        for (SignSemantic semantic : signSemantics) {
-            if (!validSignSemantic(semantic)) return false;
+        for (CompiledSign sign : compiledSigns) {
+            if (!validCompiledSign(sign, geometry, sourceStrokeCount)) {
+                return false;
+            }
         }
         return true;
+    }
+
+    private boolean hasKnownTemplates(SpellDictionary.DictionarySnapshot dictionary) {
+        for (CompiledSigil sigil : compiledSigils) {
+            if (!matchesKnownTemplate(
+                    dictionary,
+                    sigil.semanticId(),
+                    sigil.matchedTemplateId(),
+                    SymbolKind.SIGIL,
+                    sigil.displayName())) {
+                return false;
+            }
+        }
+        for (CompiledSign sign : compiledSigns) {
+            if (!matchesKnownTemplate(
+                    dictionary,
+                    sign.semanticId(),
+                    sign.matchedTemplateId(),
+                    SymbolKind.SIGN,
+                    null)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean matchesKnownTemplate(
+            SpellDictionary.DictionarySnapshot dictionary,
+            Identifier semanticId,
+            String matchedTemplateId,
+            SymbolKind kind,
+            String expectedDisplayName) {
+        Identifier templateId = Identifier.tryParse(matchedTemplateId);
+        if (semanticId == null || templateId == null) {
+            return false;
+        }
+        for (SpellDictionary.TemplateIdentity template : dictionary.templates()) {
+            Identifier knownSemanticId = Identifier.tryParse(template.semanticId());
+            Identifier knownTemplateId = Identifier.tryParse(template.templateId());
+            if (semanticId.equals(knownSemanticId)
+                    && templateId.equals(knownTemplateId)
+                    && template.kind() == kind
+                    && (expectedDisplayName == null || expectedDisplayName.equals(template.displayName()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean validCompiledSigil(CompiledSigil sigil, int sourceStrokeCount) {
+        return sigil != null
+                && sigil.semanticId() != null
+                && validIdentifierString(sigil.matchedTemplateId())
+                && sigil.displayName() != null
+                && !sigil.displayName().isBlank()
+                && sigil.element() != null
+                && validSigilSemantic(sigil.semantic())
+                && unitInterval(sigil.recognitionConfidence())
+                && validCoordinatePoint(sigil.centroid())
+                && validBounds(sigil.bounds())
+                && pointInsideBounds(sigil.centroid(), sigil.bounds())
+                && validDegrees(sigil.orientationDegrees())
+                && validSourceStrokeIndices(sigil.sourceStrokeIndices(), sourceStrokeCount);
+    }
+
+    private static boolean validCompiledSign(
+            CompiledSign sign,
+            SpellGeometry geometry,
+            int sourceStrokeCount) {
+        if (sign == null
+                || sign.semanticId() == null
+                || !validIdentifierString(sign.matchedTemplateId())
+                || !validSignSemantic(sign.semantic())
+                || !unitInterval(sign.confidence())
+                || !validDegrees(sign.angleAroundRing())
+                || !validDegrees(sign.orientationDegrees())
+                || !finiteRange(sign.radialPosition(), 0.0, MAX_NORMALIZED_RADIAL_POSITION)
+                || sign.layer() == null
+                || !validCoordinatePoint(sign.centroid())
+                || !validBounds(sign.bounds())
+                || !pointInsideBounds(sign.centroid(), sign.bounds())
+                || !validSourceStrokeIndices(sign.sourceStrokeIndices(), sourceStrokeCount)) {
+            return false;
+        }
+
+        double deltaX = sign.centroid().x - geometry.ringCenter().x;
+        double deltaY = sign.centroid().y - geometry.ringCenter().y;
+        double expectedRadialPosition = Math.hypot(deltaX, deltaY) / geometry.ringRadius();
+        double expectedAngle = Math.toDegrees(Math.atan2(deltaY, deltaX));
+        if (expectedAngle < 0.0) {
+            expectedAngle += 360.0;
+        }
+        return nearlyEqual(sign.radialPosition(), expectedRadialPosition)
+                && circularDegreesNearlyEqual(sign.angleAroundRing(), expectedAngle)
+                && sign.layer() == SpellLayer.fromRadialPosition(expectedRadialPosition);
+    }
+
+    private static boolean validGeometry(SpellGeometry geometry) {
+        if (geometry == null
+                || !validCoordinatePoint(geometry.ringCenter())
+                || !finiteRangeExclusive(geometry.ringRadius(), MIN_RING_RADIUS, MAX_RING_RADIUS)
+                || !finiteRangeExclusive(
+                        geometry.ringArea(),
+                        Math.PI * MIN_RING_RADIUS * MIN_RING_RADIUS,
+                        Math.PI * MAX_RING_RADIUS * MAX_RING_RADIUS)
+                || !finiteRangeExclusive(
+                        geometry.normalizedRingDiameter(),
+                        MIN_RING_RADIUS * 2.0,
+                        MAX_RING_RADIUS * 2.0)
+                || !unitInterval(geometry.ringCompleteness())
+                || !unitInterval(geometry.ringCircularity())
+                || !unitInterval(geometry.ringNormalizedRmse())
+                || !validBiasVector(geometry.directionalBias())
+                || !unitInterval(geometry.radialSymmetryScore())
+                || !unitInterval(geometry.bilateralSymmetryScore())
+                || !unitInterval(geometry.signBalanceScore())) {
+            return false;
+        }
+
+        return nearlyEqual(geometry.ringArea(), Math.PI * geometry.ringRadius() * geometry.ringRadius())
+                && nearlyEqual(geometry.normalizedRingDiameter(), geometry.ringRadius() * 2.0);
     }
 
     private static boolean validSigilSemantic(SigilSemantic semantic) {
@@ -382,6 +694,99 @@ public record StoredSpell(
                 && Double.isFinite(semantic.lifetimeBias());
     }
 
+    private static boolean validCoordinatePoint(Point point) {
+        return point != null
+                && finiteRange(point.x, MIN_NORMALIZED_COORDINATE, MAX_NORMALIZED_COORDINATE)
+                && finiteRange(point.y, MIN_NORMALIZED_COORDINATE, MAX_NORMALIZED_COORDINATE);
+    }
+
+    private static boolean validBiasVector(Point point) {
+        return point != null
+                && Double.isFinite(point.x)
+                && Double.isFinite(point.y)
+                && Math.hypot(point.x, point.y)
+                        <= MAX_DIRECTIONAL_BIAS_MAGNITUDE + DERIVED_VALUE_TOLERANCE;
+    }
+
+    private static boolean validBounds(BoundingBox bounds) {
+        return bounds != null
+                && finiteRange(bounds.minX(), MIN_NORMALIZED_COORDINATE, MAX_NORMALIZED_COORDINATE)
+                && finiteRange(bounds.minY(), MIN_NORMALIZED_COORDINATE, MAX_NORMALIZED_COORDINATE)
+                && finiteRange(bounds.maxX(), MIN_NORMALIZED_COORDINATE, MAX_NORMALIZED_COORDINATE)
+                && finiteRange(bounds.maxY(), MIN_NORMALIZED_COORDINATE, MAX_NORMALIZED_COORDINATE)
+                && bounds.minX() <= bounds.maxX()
+                && bounds.minY() <= bounds.maxY();
+    }
+
+    private static boolean pointInsideBounds(Point point, BoundingBox bounds) {
+        return point.x + DERIVED_VALUE_TOLERANCE >= bounds.minX()
+                && point.x - DERIVED_VALUE_TOLERANCE <= bounds.maxX()
+                && point.y + DERIVED_VALUE_TOLERANCE >= bounds.minY()
+                && point.y - DERIVED_VALUE_TOLERANCE <= bounds.maxY();
+    }
+
+    private static boolean validSourceStrokeIndices(List<Integer> indices, int sourceStrokeCount) {
+        if (indices == null || indices.isEmpty() || indices.size() > MAX_SOURCE_STROKES) {
+            return false;
+        }
+        Set<Integer> unique = new HashSet<>();
+        for (Integer index : indices) {
+            if (index == null
+                    || index < 0
+                    || index >= MAX_SOURCE_STROKES
+                    || (sourceStrokeCount >= 0 && index >= sourceStrokeCount)
+                    || !unique.add(index)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean validIdentifierString(String value) {
+        return value != null && Identifier.tryParse(value) != null;
+    }
+
+    private static boolean validDegrees(double value) {
+        return Double.isFinite(value) && value >= 0.0 && value < 360.0;
+    }
+
+    private static boolean unitInterval(double value) {
+        return finiteRange(value, 0.0, 1.0);
+    }
+
+    private static boolean finiteRange(double value, double minimum, double maximum) {
+        return Double.isFinite(value) && value >= minimum && value <= maximum;
+    }
+
+    private static boolean finiteRangeExclusive(double value, double minimum, double maximum) {
+        return Double.isFinite(value) && value > minimum && value < maximum;
+    }
+
+    private static boolean nearlyEqual(double left, double right) {
+        double scale = Math.max(1.0, Math.max(Math.abs(left), Math.abs(right)));
+        return Math.abs(left - right) <= DERIVED_VALUE_TOLERANCE * scale;
+    }
+
+    private static boolean circularDegreesNearlyEqual(double left, double right) {
+        double difference = Math.abs(left - right) % 360.0;
+        difference = Math.min(difference, 360.0 - difference);
+        return difference <= DERIVED_VALUE_TOLERANCE;
+    }
+
+    private static boolean validAuthoritySignature(String signature) {
+        if (signature == null || signature.length() != 64) {
+            return false;
+        }
+        for (int index = 0; index < signature.length(); index++) {
+            char character = signature.charAt(index);
+            if ((character < '0' || character > '9')
+                    && (character < 'a' || character > 'f')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** Reconstruct the execution IR directly, without recognition or parsing. */
     public SpellIr toIr() {
         String prefix = switch (state) {
@@ -393,17 +798,16 @@ public record StoredSpell(
         return new SpellIr(
                 state,
                 null,
-                elements,
-                signCounts,
-                sigilSemantic,
-                signSemantics,
+                compiledSigils,
+                compiledSigns,
+                geometry,
                 displayName,
                 prefix + displayName);
     }
 
     /**
      * Hash raw drawing geometry while retaining pen-lift boundaries. Quantization
-     * matches the historical hash, but stroke and point counts are now explicit.
+     * matches the historical hash, but stroke and point counts are explicit.
      */
     public static int computeStrokeHash(List<List<Point>> strokes) {
         if (strokes == null || strokes.isEmpty()) return 0;
@@ -419,10 +823,10 @@ public record StoredSpell(
                     hash = 31 * hash;
                     continue;
                 }
-                int qx = (int) Math.round(point.x * 1000);
-                int qy = (int) Math.round(point.y * 1000);
-                hash = 31 * hash + qx;
-                hash = 31 * hash + qy;
+                int quantizedX = (int) Math.round(point.x * 1000);
+                int quantizedY = (int) Math.round(point.y * 1000);
+                hash = 31 * hash + quantizedX;
+                hash = 31 * hash + quantizedY;
             }
         }
         return hash;
@@ -437,10 +841,9 @@ public record StoredSpell(
     private static String signCompiledPayload(
             int formatVersion,
             SpellState state,
-            List<ElementType> elements,
-            Map<Identifier, Integer> signCounts,
-            SigilSemantic sigilSemantic,
-            List<SignSemantic> signSemantics,
+            List<CompiledSigil> compiledSigils,
+            List<CompiledSign> compiledSigns,
+            SpellGeometry geometry,
             String displayName,
             int strokeHash,
             String dictionaryVersion,
@@ -452,30 +855,21 @@ public record StoredSpell(
         updateInt(mac, formatVersion);
         updateString(mac, state == null ? "" : state.name());
 
-        updateInt(mac, elements.size());
-        for (ElementType element : elements) {
-            updateString(mac, element == null ? "" : element.name());
+        updateInt(mac, compiledSigils == null ? -1 : compiledSigils.size());
+        if (compiledSigils != null) {
+            for (CompiledSigil sigil : compiledSigils) {
+                updateCompiledSigil(mac, sigil);
+            }
         }
 
-        updateInt(mac, signCounts.size());
-        signCounts.entrySet().stream()
-                .sorted(Comparator.comparing(entry -> entry.getKey().toString()))
-                .forEach(entry -> {
-                    updateString(mac, entry.getKey().toString());
-                    updateInt(mac, entry.getValue() == null ? 0 : entry.getValue());
-                });
-
-        if (sigilSemantic == null) {
-            updateInt(mac, 0);
-        } else {
-            updateInt(mac, 1);
-            updateSigilSemantic(mac, sigilSemantic);
+        updateInt(mac, compiledSigns == null ? -1 : compiledSigns.size());
+        if (compiledSigns != null) {
+            for (CompiledSign sign : compiledSigns) {
+                updateCompiledSign(mac, sign);
+            }
         }
 
-        updateInt(mac, signSemantics.size());
-        for (SignSemantic semantic : signSemantics) {
-            updateSignSemantic(mac, semantic);
-        }
+        updateSpellGeometry(mac, geometry);
         updateString(mac, safeString(displayName));
         updateInt(mac, strokeHash);
         updateString(mac, safeString(dictionaryVersion));
@@ -484,12 +878,74 @@ public record StoredSpell(
         return HexFormat.of().formatHex(mac.doFinal());
     }
 
+    private static void updateCompiledSigil(Mac mac, CompiledSigil sigil) {
+        if (sigil == null) {
+            updateInt(mac, 0);
+            return;
+        }
+        updateInt(mac, 1);
+        updateIdentifier(mac, sigil.semanticId());
+        updateString(mac, safeString(sigil.matchedTemplateId()));
+        updateString(mac, safeString(sigil.displayName()));
+        updateString(mac, sigil.element() == null ? "" : sigil.element().name());
+        updateSigilSemantic(mac, sigil.semantic());
+        updateDouble(mac, sigil.recognitionConfidence());
+        updatePoint(mac, sigil.centroid());
+        updateBounds(mac, sigil.bounds());
+        updateDouble(mac, sigil.orientationDegrees());
+        updateSourceStrokeIndices(mac, sigil.sourceStrokeIndices());
+    }
+
+    private static void updateCompiledSign(Mac mac, CompiledSign sign) {
+        if (sign == null) {
+            updateInt(mac, 0);
+            return;
+        }
+        updateInt(mac, 1);
+        updateIdentifier(mac, sign.semanticId());
+        updateString(mac, safeString(sign.matchedTemplateId()));
+        updateSignSemantic(mac, sign.semantic());
+        updateDouble(mac, sign.confidence());
+        updateDouble(mac, sign.angleAroundRing());
+        updateDouble(mac, sign.orientationDegrees());
+        updateDouble(mac, sign.radialPosition());
+        updateString(mac, sign.layer() == null ? "" : sign.layer().name());
+        updatePoint(mac, sign.centroid());
+        updateBounds(mac, sign.bounds());
+        updateSourceStrokeIndices(mac, sign.sourceStrokeIndices());
+        updateInt(mac, sign.reversed() ? 1 : 0);
+    }
+
+    private static void updateSpellGeometry(Mac mac, SpellGeometry geometry) {
+        if (geometry == null) {
+            updateInt(mac, 0);
+            return;
+        }
+        updateInt(mac, 1);
+        updatePoint(mac, geometry.ringCenter());
+        updateDouble(mac, geometry.ringRadius());
+        updateDouble(mac, geometry.ringArea());
+        updateDouble(mac, geometry.normalizedRingDiameter());
+        updateDouble(mac, geometry.ringCompleteness());
+        updateDouble(mac, geometry.ringCircularity());
+        updateDouble(mac, geometry.ringNormalizedRmse());
+        updatePoint(mac, geometry.directionalBias());
+        updateDouble(mac, geometry.radialSymmetryScore());
+        updateDouble(mac, geometry.bilateralSymmetryScore());
+        updateDouble(mac, geometry.signBalanceScore());
+    }
+
     private static void updateSigilSemantic(Mac mac, SigilSemantic semantic) {
-        updateLong(mac, Double.doubleToLongBits(semantic.force()));
-        updateLong(mac, Double.doubleToLongBits(semantic.focus()));
-        updateLong(mac, Double.doubleToLongBits(semantic.spread()));
-        updateLong(mac, Double.doubleToLongBits(semantic.range()));
-        updateLong(mac, Double.doubleToLongBits(semantic.lifetimeBias()));
+        if (semantic == null) {
+            updateInt(mac, 0);
+            return;
+        }
+        updateInt(mac, 1);
+        updateDouble(mac, semantic.force());
+        updateDouble(mac, semantic.focus());
+        updateDouble(mac, semantic.spread());
+        updateDouble(mac, semantic.range());
+        updateDouble(mac, semantic.lifetimeBias());
     }
 
     private static void updateSignSemantic(Mac mac, SignSemantic semantic) {
@@ -500,11 +956,51 @@ public record StoredSpell(
         updateInt(mac, 1);
         updateString(mac, safeString(semantic.manifestation()));
         updateString(mac, safeString(semantic.directionMode()));
-        updateLong(mac, Double.doubleToLongBits(semantic.force()));
-        updateLong(mac, Double.doubleToLongBits(semantic.focus()));
-        updateLong(mac, Double.doubleToLongBits(semantic.spread()));
-        updateLong(mac, Double.doubleToLongBits(semantic.range()));
-        updateLong(mac, Double.doubleToLongBits(semantic.lifetimeBias()));
+        updateDouble(mac, semantic.force());
+        updateDouble(mac, semantic.focus());
+        updateDouble(mac, semantic.spread());
+        updateDouble(mac, semantic.range());
+        updateDouble(mac, semantic.lifetimeBias());
+    }
+
+    private static void updateIdentifier(Mac mac, Identifier identifier) {
+        updateString(mac, identifier == null ? "" : identifier.toString());
+    }
+
+    private static void updatePoint(Mac mac, Point point) {
+        if (point == null) {
+            updateInt(mac, 0);
+            return;
+        }
+        updateInt(mac, 1);
+        updateDouble(mac, point.x);
+        updateDouble(mac, point.y);
+    }
+
+    private static void updateBounds(Mac mac, BoundingBox bounds) {
+        if (bounds == null) {
+            updateInt(mac, 0);
+            return;
+        }
+        updateInt(mac, 1);
+        updateDouble(mac, bounds.minX());
+        updateDouble(mac, bounds.minY());
+        updateDouble(mac, bounds.maxX());
+        updateDouble(mac, bounds.maxY());
+    }
+
+    private static void updateSourceStrokeIndices(Mac mac, List<Integer> sourceStrokeIndices) {
+        updateInt(mac, sourceStrokeIndices == null ? -1 : sourceStrokeIndices.size());
+        if (sourceStrokeIndices == null) {
+            return;
+        }
+        for (Integer sourceStrokeIndex : sourceStrokeIndices) {
+            updateInt(mac, sourceStrokeIndex == null ? -1 : sourceStrokeIndex);
+        }
+    }
+
+    private static void updateDouble(Mac mac, double value) {
+        updateLong(mac, Double.doubleToLongBits(value));
     }
 
     private static void updateString(Mac mac, String value) {
@@ -532,32 +1028,12 @@ public record StoredSpell(
     }
 
     private static StoredSpell fromPersisted(PersistedSpell persisted) {
-        List<ElementType> elements = new ArrayList<>(persisted.elements());
-        if (elements.isEmpty() && !persisted.legacyElement().isBlank()) {
-            try {
-                elements.add(ElementType.valueOf(
-                        persisted.legacyElement().toUpperCase(Locale.ROOT)));
-            } catch (IllegalArgumentException ignored) {
-                // Unknown legacy elements make the cache stale; raw strokes remain loadable.
-            }
-        }
-
-        Map<Identifier, Integer> signCounts = new LinkedHashMap<>();
-        for (Map.Entry<String, Integer> entry : persisted.signCounts().entrySet()) {
-            Identifier id = Identifier.tryParse(entry.getKey());
-            Integer count = entry.getValue();
-            if (id != null && count != null && count > 0) {
-                signCounts.merge(id, count, Integer::sum);
-            }
-        }
-
         return new StoredSpell(
                 persisted.formatVersion(),
                 persisted.state(),
-                elements,
-                signCounts,
-                persisted.sigilSemantic().orElse(null),
-                persisted.signSemantics(),
+                persisted.compiledSigils(),
+                persisted.compiledSigns(),
+                persisted.geometry().orElse(null),
                 persisted.displayName(),
                 persisted.strokeHash(),
                 persisted.dictionaryVersion(),
@@ -566,23 +1042,59 @@ public record StoredSpell(
                 persisted.authoritySignature());
     }
 
-    private PersistedSpell toPersisted() {
-        Map<String, Integer> stringSignCounts = new LinkedHashMap<>();
-        signCounts.forEach((id, count) -> stringSignCounts.put(id.toString(), count));
-        return new PersistedSpell(
+    private static DataResult<StoredSpell> decodePersisted(PersistedSpell persisted) {
+        StoredSpell spell = fromPersisted(persisted);
+        if (spell.formatVersion() == FORMAT_VERSION
+                && !spell.hasStructurallyValidCurrentPayload(-1)) {
+            return DataResult.error(() -> "Malformed v3 stored-spell payload");
+        }
+        return DataResult.success(spell);
+    }
+
+    private DataResult<PersistedSpell> encodePersisted() {
+        if (formatVersion == FORMAT_VERSION && !hasStructurallyValidCurrentPayload(-1)) {
+            return DataResult.error(() -> "Cannot encode malformed v3 stored-spell payload");
+        }
+        return DataResult.success(new PersistedSpell(
                 formatVersion,
                 state,
-                elements,
-                "",
-                stringSignCounts,
-                Optional.ofNullable(sigilSemantic),
-                signSemantics,
+                compiledSigils,
+                compiledSigns,
+                Optional.ofNullable(geometry),
                 displayName,
                 strokeHash,
                 dictionaryVersion,
                 dictionaryHash,
                 recognizerVersion,
-                authoritySignature);
+                authoritySignature,
+                List.of(),
+                "",
+                Map.of(),
+                Optional.empty(),
+                List.of()));
+    }
+
+    private static <E extends Enum<E>> DataResult<E> enumValue(
+            Class<E> enumClass,
+            String value,
+            String label) {
+        try {
+            return DataResult.success(Enum.valueOf(enumClass, value.toUpperCase(Locale.ROOT)));
+        } catch (IllegalArgumentException exception) {
+            return DataResult.error(() -> "Unknown " + label + ": " + value);
+        }
+    }
+
+    private static <E extends Enum<E>> E decodeEnum(
+            RegistryFriendlyByteBuf buffer,
+            Class<E> enumClass) {
+        return Enum.valueOf(
+                enumClass,
+                ByteBufCodecs.STRING_UTF8.decode(buffer).toUpperCase(Locale.ROOT));
+    }
+
+    private static void encodeEnum(RegistryFriendlyByteBuf buffer, Enum<?> value) {
+        ByteBufCodecs.STRING_UTF8.encode(buffer, value.name().toLowerCase(Locale.ROOT));
     }
 
     private static String safeString(String value) {

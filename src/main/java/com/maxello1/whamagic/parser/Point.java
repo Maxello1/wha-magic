@@ -7,6 +7,7 @@ import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 
 import java.util.List;
+import java.util.Objects;
 
 public class Point {
     public final double x, y;
@@ -14,6 +15,23 @@ public class Point {
     public Point(double x, double y) {
         this.x = x;
         this.y = y;
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) return true;
+        if (!(other instanceof Point point)) return false;
+        return Double.compare(x, point.x) == 0 && Double.compare(y, point.y) == 0;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(x, y);
+    }
+
+    @Override
+    public String toString() {
+        return "Point[x=" + x + ", y=" + y + "]";
     }
 
     public static final Codec<Point> CODEC = RecordCodecBuilder.create(instance -> instance.group(

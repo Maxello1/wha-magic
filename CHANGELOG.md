@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## [0.4.0] - 2026-07-16
+
+### Added
+
+- Added compiled per-sigil and per-sign geometry, identity, confidence, orientation, layer, and source ownership.
+- Added ring geometry, directional bias, radial symmetry, bilateral symmetry, and sign-balance metrics to compiled spells.
+
+### Changed
+
+- Upgraded authoritative stored spells to format version 3 with complete geometry authentication.
+- Made version 2 stored spells stale so they are recompiled once from their raw strokes.
+- Kept current spell casting behavior through derived compatibility views over the compiled glyph lists.
+
 ## [0.3.2-alpha.2] - 2026-07-14
 
 ### Added

@@ -6,6 +6,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.maxello1.whamagic.magic.CandidateGenerationSettings;
 import com.maxello1.whamagic.magic.ClassifiedUnknownInk;
+import com.maxello1.whamagic.magic.CompiledSign;
 import com.maxello1.whamagic.magic.GlyphAst;
 import com.maxello1.whamagic.magic.GlyphWarning;
 import com.maxello1.whamagic.magic.RingDetector;
@@ -15,6 +16,7 @@ import com.maxello1.whamagic.magic.SigilSemantic;
 import com.maxello1.whamagic.magic.SignSemantic;
 import com.maxello1.whamagic.magic.SpellState;
 import com.maxello1.whamagic.magic.SpellCompiler;
+import com.maxello1.whamagic.magic.SpellLayer;
 import com.maxello1.whamagic.magic.SymbolKind;
 import com.maxello1.whamagic.magic.UnknownInkClassification;
 import org.junit.jupiter.api.BeforeAll;
@@ -29,8 +31,6 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
@@ -372,16 +372,24 @@ public class SpellParserTest {
 
     @Test
     public void spellIrPreservesSignOrderWithoutMutableMapLeakage() {
-        Map<Identifier, Integer> ordered = new LinkedHashMap<>();
-        ordered.put(Identifier.tryParse("wha-magic:levitation"), 2);
-        ordered.put(Identifier.tryParse("wha-magic:column"), 1);
+        CompiledSign levitation = compiledSign("levitation");
+        CompiledSign column = compiledSign("column");
         var ir = new com.maxello1.whamagic.magic.SpellIr(
-                SpellState.DRAFT, null, List.of(), ordered, null, List.of(), "", "");
+                SpellState.DRAFT, null, List.of(),
+                List.of(levitation, levitation, column), null, "", "");
 
         assertEquals(List.of("levitation", "column"), ir.signCounts().keySet().stream()
                 .map(Identifier::getPath).toList());
         assertThrows(UnsupportedOperationException.class,
                 () -> ir.signCounts().put(Identifier.tryParse("wha-magic:convergence"), 1));
+    }
+
+    private static CompiledSign compiledSign(String path) {
+        return new CompiledSign(
+                Identifier.tryParse("wha-magic:" + path), path, SignSemantic.empty(),
+                1.0, 0.0, 0.0, 0.5, SpellLayer.INNER,
+                new Point(0.5, 0.5), new BoundingBox(0.4, 0.4, 0.6, 0.6),
+                List.of(), false);
     }
 
     private static List<Point> shortMark(double y) {
