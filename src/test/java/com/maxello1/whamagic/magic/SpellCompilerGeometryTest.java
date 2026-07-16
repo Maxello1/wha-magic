@@ -150,6 +150,42 @@ class SpellCompilerGeometryTest {
                 () -> assertEquals(List.of(4), ir.compiledSigils().get(1).sourceStrokeIndices()));
     }
 
+    @Test
+    void compilesDirectQualityMetricsAndDerivedParameters() {
+        RingDetector.RingGlyph ring = ring(new Point(0.5, 0.5), 0.4);
+        RecognitionQualityMetrics sigilMetrics =
+                new RecognitionQualityMetrics(0.92, 0.88, 0.08, 0.90);
+        RecognitionQualityMetrics signMetrics =
+                new RecognitionQualityMetrics(0.85, 0.82, 0.12, 0.87);
+        RecognizedSigil sigil = new RecognizedSigil(
+                id("earth"), "earth", "Earth", ElementType.EARTH,
+                EARTH_SEMANTIC, 0.91, sigilMetrics,
+                new Point(0.5, 0.5), new BoundingBox(0.4, 0.4, 0.6, 0.6),
+                13.5, List.of(1), List.of(), RecognitionRejectionReason.NONE);
+        RecognizedSign sign = new RecognizedSign(
+                2, id("column").toString(), "column", 0.88, signMetrics,
+                0.0, 180.0, "sign", COLUMN_SEMANTIC, List.of(2),
+                new Point(0.82, 0.5), new BoundingBox(0.80, 0.48, 0.84, 0.52),
+                List.of(), RecognitionRejectionReason.NONE);
+
+        SpellIr ir = SpellCompiler.compile(ast(ring, List.of(sigil), List.of(sign)));
+
+        assertAll(
+                () -> assertEquals(sigilMetrics,
+                        ir.compiledSigils().getFirst().qualityMetrics()),
+                () -> assertEquals(signMetrics,
+                        ir.compiledSigns().getFirst().qualityMetrics()),
+                () -> assertEquals(
+                        SpellQualityAnalyzer.symbolPrecision(0.91, sigilMetrics),
+                        ir.quality().sigilPrecision(), 1.0e-12),
+                () -> assertEquals(
+                        SpellQualityAnalyzer.symbolPrecision(0.88, signMetrics),
+                        ir.quality().signPrecision(), 1.0e-12),
+                () -> assertTrue(ir.parameters().sizeScale() > 0.0),
+                () -> assertEquals(ir.quality().stability(),
+                        ir.parameters().stability()));
+    }
+
     private static GlyphAst ast(
             RingDetector.RingGlyph ring,
             List<RecognizedSigil> sigils,

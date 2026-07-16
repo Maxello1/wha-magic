@@ -2,12 +2,15 @@ package com.maxello1.whamagic.item;
 
 import com.maxello1.whamagic.WitchHatMod;
 import com.maxello1.whamagic.magic.SpellExecutionService;
+import com.maxello1.whamagic.magic.SpellParameters;
+import com.maxello1.whamagic.magic.SpellQuality;
 import com.maxello1.whamagic.magic.SpellState;
 import com.maxello1.whamagic.magic.StoredSpell;
 import com.maxello1.whamagic.magic.StoredSpellResolver;
 import com.maxello1.whamagic.parser.Point;
 import com.maxello1.whamagic.parser.ParseDetail;
 import com.maxello1.whamagic.parser.SpellParser;
+import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
@@ -20,6 +23,7 @@ import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.level.Level;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
 
 public class SpellPaperItem extends Item {
@@ -99,11 +103,58 @@ public class SpellPaperItem extends Item {
             TooltipFlag tooltipFlag) {
         StoredSpell spell = stack.get(WitchHatMod.STORED_SPELL_COMPONENT);
         if (spell != null && !spell.displayName().isEmpty()) {
-            String prefix = spell.state() == SpellState.ACTIVE ? "§aActive: " : "§dPrepared: ";
-            tooltipComponents.accept(Component.literal(prefix + spell.displayName()));
+            String stateLabel;
+            ChatFormatting stateColor;
+            if (spell.state() == SpellState.ACTIVE) {
+                stateLabel = "Active: ";
+                stateColor = ChatFormatting.GREEN;
+            } else if (spell.state() == SpellState.PREPARED) {
+                stateLabel = "Prepared: ";
+                stateColor = ChatFormatting.LIGHT_PURPLE;
+            } else {
+                stateLabel = "Stored: ";
+                stateColor = ChatFormatting.GRAY;
+            }
+            tooltipComponents.accept(Component.literal(stateLabel + spell.displayName())
+                    .withStyle(stateColor));
+
+            if (spell.formatVersion() == StoredSpell.FORMAT_VERSION) {
+                SpellQuality quality = spell.quality();
+                SpellParameters parameters = spell.parameters();
+                tooltipComponents.accept(Component.literal(String.format(
+                                Locale.ROOT,
+                                "Quality: %s (%.0f%%)",
+                                displayEnum(quality.tier()),
+                                quality.overall() * 100.0))
+                        .withStyle(ChatFormatting.GRAY));
+                tooltipComponents.accept(Component.literal(
+                                "Size: " + displayEnum(parameters.sizeTier()))
+                        .withStyle(ChatFormatting.GRAY));
+                tooltipComponents.accept(Component.literal(String.format(
+                                Locale.ROOT,
+                                "Power: %.2fx",
+                                parameters.powerMultiplier()))
+                        .withStyle(ChatFormatting.GRAY));
+                tooltipComponents.accept(Component.literal(String.format(
+                                Locale.ROOT,
+                                "Range: %.2fx",
+                                parameters.rangeMultiplier()))
+                        .withStyle(ChatFormatting.GRAY));
+                tooltipComponents.accept(Component.literal(String.format(
+                                Locale.ROOT,
+                                "Duration: %.2fx",
+                                parameters.durationMultiplier()))
+                        .withStyle(ChatFormatting.GRAY));
+            }
         } else {
-            tooltipComponents.accept(Component.literal("§7Empty Spell Paper"));
+            tooltipComponents.accept(Component.literal("Empty Spell Paper")
+                    .withStyle(ChatFormatting.GRAY));
         }
         super.appendHoverText(stack, context, display, tooltipComponents, tooltipFlag);
+    }
+
+    private static String displayEnum(Enum<?> value) {
+        String lower = value.name().toLowerCase(Locale.ROOT);
+        return Character.toUpperCase(lower.charAt(0)) + lower.substring(1);
     }
 }

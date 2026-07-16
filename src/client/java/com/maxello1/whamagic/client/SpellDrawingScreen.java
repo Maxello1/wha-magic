@@ -2,6 +2,10 @@ package com.maxello1.whamagic.client;
 
 import com.maxello1.whamagic.dev.RecognitionSampleCapture;
 import com.maxello1.whamagic.editor.DrawingEditorState;
+import com.maxello1.whamagic.magic.SpellIr;
+import com.maxello1.whamagic.magic.SpellParameters;
+import com.maxello1.whamagic.magic.SpellQuality;
+import com.maxello1.whamagic.magic.SpellState;
 import com.maxello1.whamagic.network.CancelSpellEditPayload;
 import com.maxello1.whamagic.network.DrawingLimits;
 import com.maxello1.whamagic.network.SaveSpellPayload;
@@ -19,6 +23,7 @@ import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class SpellDrawingScreen extends Screen {
     private static final double ERASER_RADIUS_NORM = 0.015;
@@ -50,6 +55,10 @@ public class SpellDrawingScreen extends Screen {
     private String parserDebugInfo = "";
     private SpellParser.ParseResult lastParseResult = null;
     private SpellParser.ParseResult fullDiagnosticsResult = null;
+    private SpellIr cachedPresentationIr = null;
+    private List<String> previewEstimateLines = List.of();
+    private List<String> verboseQualityLines = List.of();
+    private int previewEstimateColor = 0xFF88CCFF;
     
     // Sample recording feedback
     private String sampleFeedback = "";
@@ -290,6 +299,7 @@ public class SpellDrawingScreen extends Screen {
 
     private void schedulePreview() {
         fullDiagnosticsResult = null;
+        clearCachedPresentation();
         if (editor.strokeCount() == 0) {
             currentSpellStatus = "Cleared";
             parserDebugInfo = "";
@@ -308,6 +318,7 @@ public class SpellDrawingScreen extends Screen {
             currentSpellStatus = "Cleared";
             parserDebugInfo = "";
             lastParseResult = null;
+            clearCachedPresentation();
             return;
         }
         ParseDetail detail = debugMode > 0
@@ -335,6 +346,7 @@ public class SpellDrawingScreen extends Screen {
         if (result == null) {
             currentSpellStatus = "Cleared";
             parserDebugInfo = "";
+            clearCachedPresentation();
             return;
         }
         currentSpellStatus = result.ir.statusMessage();
@@ -343,6 +355,102 @@ public class SpellDrawingScreen extends Screen {
         } else {
             parserDebugInfo = "Invalid or Incomplete";
         }
+        if (cachedPresentationIr != result.ir) {
+            cachePresentation(result.ir);
+        }
+    }
+
+    private void clearCachedPresentation() {
+        cachedPresentationIr = null;
+        previewEstimateLines = List.of();
+        verboseQualityLines = List.of();
+        previewEstimateColor = 0xFF88CCFF;
+    }
+
+    private void cachePresentation(SpellIr ir) {
+        cachedPresentationIr = ir;
+        boolean castable = ir.state() == SpellState.ACTIVE;
+        boolean assessed = ir.geometry() != null && !ir.compiledSigils().isEmpty();
+        String label = ir.displayName().isBlank() ? ir.statusMessage() : ir.displayName();
+        String headline = castable
+                ? "Preview estimate: " + label
+                : "Preview estimate (NOT CASTABLE): " + label;
+        previewEstimateColor = castable ? 0xFF88FFAA : 0xFFFF8888;
+
+        if (!assessed) {
+            previewEstimateLines = List.of(headline, "Quality estimate: unavailable");
+            List<String> verbose = new ArrayList<>();
+            verbose.add("Quality: unassessed");
+            if (ir.geometry() != null) {
+                verbose.add(String.format(
+                        Locale.ROOT,
+                        "ringDiameter=%.4f",
+                        ir.geometry().normalizedRingDiameter()));
+            }
+            verboseQualityLines = List.copyOf(verbose);
+            return;
+        }
+
+        SpellQuality quality = ir.quality();
+        SpellParameters parameters = ir.parameters();
+        previewEstimateLines = List.of(
+                headline,
+                String.format(
+                        Locale.ROOT,
+                        "Quality estimate: %s %.0f%%",
+                        displayEnum(quality.tier()),
+                        quality.overall() * 100.0),
+                String.format(
+                        Locale.ROOT,
+                        "Size estimate: %s %.2fx",
+                        displayEnum(parameters.sizeTier()),
+                        parameters.sizeScale()),
+                String.format(Locale.ROOT, "Power estimate: %.2fx", parameters.powerMultiplier()),
+                String.format(Locale.ROOT, "Range estimate: %.2fx", parameters.rangeMultiplier()),
+                String.format(Locale.ROOT, "Duration estimate: %.2fx", parameters.durationMultiplier()));
+
+        verboseQualityLines = List.of(
+                String.format(Locale.ROOT, "overall=%.4f tier=%s", quality.overall(), quality.tier()),
+                String.format(Locale.ROOT, "ringPrecision=%.4f", quality.ringPrecision()),
+                String.format(
+                        Locale.ROOT,
+                        "ringCompleteness=%.4f",
+                        ir.geometry().ringCompleteness()),
+                String.format(
+                        Locale.ROOT,
+                        "ringCircularity=%.4f",
+                        ir.geometry().ringCircularity()),
+                String.format(
+                        Locale.ROOT,
+                        "ringNormalizedRmse=%.4f",
+                        ir.geometry().ringNormalizedRmse()),
+                String.format(Locale.ROOT, "sigilPrecision=%.4f", quality.sigilPrecision()),
+                String.format(Locale.ROOT, "signPrecision=%.4f", quality.signPrecision()),
+                String.format(Locale.ROOT, "layoutPrecision=%.4f", quality.layoutPrecision()),
+                String.format(Locale.ROOT, "inkCleanliness=%.4f", quality.inkCleanliness()),
+                String.format(Locale.ROOT, "qualityStability=%.4f", quality.stability()),
+                String.format(
+                        Locale.ROOT,
+                        "ringDiameter=%.4f",
+                        ir.geometry().normalizedRingDiameter()),
+                String.format(
+                        Locale.ROOT,
+                        "sizeScale=%.4f tier=%s",
+                        parameters.sizeScale(),
+                        parameters.sizeTier()),
+                String.format(Locale.ROOT, "qualityEfficiency=%.4f", parameters.qualityEfficiency()),
+                String.format(Locale.ROOT, "powerMultiplier=%.4f", parameters.powerMultiplier()),
+                String.format(Locale.ROOT, "rangeMultiplier=%.4f", parameters.rangeMultiplier()),
+                String.format(Locale.ROOT, "radiusMultiplier=%.4f", parameters.radiusMultiplier()),
+                String.format(Locale.ROOT, "durationMultiplier=%.4f", parameters.durationMultiplier()),
+                String.format(Locale.ROOT, "speedMultiplier=%.4f", parameters.speedMultiplier()),
+                String.format(Locale.ROOT, "forceMultiplier=%.4f", parameters.forceMultiplier()),
+                String.format(Locale.ROOT, "parameterStability=%.4f", parameters.stability()));
+    }
+
+    private static String displayEnum(Enum<?> value) {
+        String lower = value.name().toLowerCase(Locale.ROOT);
+        return Character.toUpperCase(lower.charAt(0)) + lower.substring(1);
     }
 
     @Override
@@ -476,6 +584,10 @@ public class SpellDrawingScreen extends Screen {
         if (!sampleFeedback.isEmpty() && System.currentTimeMillis() - sampleFeedbackTime < 3000) {
             graphics.text(this.font, sampleFeedback, 10, this.height - 12, 0xFF55FF55);
         }
+
+        if (debugMode == 0) {
+            renderPreviewEstimate(graphics);
+        }
         
         // Debug overlay
         if (debugMode > 0) {
@@ -497,14 +609,46 @@ public class SpellDrawingScreen extends Screen {
 
         super.extractRenderState(graphics, mouseX, mouseY, delta);
     }
+
+    private void renderPreviewEstimate(
+            net.minecraft.client.gui.GuiGraphicsExtractor graphics) {
+        if (previewEstimateLines.isEmpty()) return;
+
+        int x = 10;
+        int y = 58;
+        int lineHeight = 10;
+        int textWidth = 0;
+        for (String line : previewEstimateLines) {
+            textWidth = Math.max(textWidth, this.font.width(line));
+        }
+        graphics.fill(
+                x - 4,
+                y - 3,
+                Math.min(this.width - 6, x + textWidth + 4),
+                y + previewEstimateLines.size() * lineHeight + 3,
+                0xCC101018);
+        for (String line : previewEstimateLines) {
+            graphics.text(this.font, line, x, y, previewEstimateColor);
+            y += lineHeight;
+        }
+    }
     
     private void renderDebugOverlay(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         String modeName = debugMode == 1 ? "Basic" : "Verbose";
         graphics.text(this.font, "Debug [" + modeName + "]: " + parserDebugInfo, 10, 58, 0xFFFFFF00);
         graphics.text(this.font, String.format("Mouse Norm: %.3f, %.3f", toNormalized(mouseX, mouseY).x, toNormalized(mouseX, mouseY).y), 10, 70, 0xFFFFFF00);
         graphics.text(this.font, "F3: cycle debug | F5: save sample", 10, 82, 0xFF888888);
-        
-        if (lastParseResult == null || lastParseResult.debugResult == null) return;
+
+        if (lastParseResult == null) return;
+
+        int summaryY = 94;
+        if (debugMode >= 2) {
+            for (String line : verboseQualityLines) {
+                graphics.text(this.font, line, 10, summaryY, 0xFF88DDFF);
+                summaryY += 10;
+            }
+        }
+        if (lastParseResult.debugResult == null) return;
         
         var debug = lastParseResult.debugResult;
         int unknownCount = debug.unknowns() != null ? debug.unknowns().size() : 0;
@@ -527,7 +671,7 @@ public class SpellDrawingScreen extends Screen {
                 debug.candidateCount(), debug.selectedCandidateCount(),
                 debug.recognitionCalls(), unknownCount,
                 limitStatus),
-                10, 94, 0xFFFFFF00);
+                10, summaryY, 0xFFFFFF00);
         
         // === VERBOSE: Primitive group boxes (blue) ===
         if (debugMode >= 2 && debug.primitiveGroups() != null) {
@@ -635,7 +779,7 @@ public class SpellDrawingScreen extends Screen {
         
         // === VERBOSE: Evaluated candidate details ===
         if (debugMode >= 2 && debug.allEvaluated() != null) {
-            int infoY = 106;
+            int infoY = summaryY + 12;
             graphics.text(this.font, "Prim groups: " + debug.primitiveGroupCount(), 10, infoY, 0xFF88CCFF);
             infoY += 10;
             graphics.text(this.font, String.format("Ring work: %d combos / %d fits / %.3f ms | strokes=%s",

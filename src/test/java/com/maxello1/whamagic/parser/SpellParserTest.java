@@ -17,7 +17,9 @@ import com.maxello1.whamagic.magic.SignSemantic;
 import com.maxello1.whamagic.magic.SpellState;
 import com.maxello1.whamagic.magic.SpellCompiler;
 import com.maxello1.whamagic.magic.SpellLayer;
+import com.maxello1.whamagic.magic.SpellQualityAnalyzer;
 import com.maxello1.whamagic.magic.SymbolKind;
+import com.maxello1.whamagic.magic.SymbolRecognitionResult;
 import com.maxello1.whamagic.magic.UnknownInkClassification;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -163,6 +165,44 @@ public class SpellParserTest {
         assertEquals("column", merged.id());
         assertTrue(splitResult.recognized(), () -> "Split Column rejected: " + splitResult);
         assertEquals("column", splitResult.id());
+    }
+
+    @Test
+    public void directQualityMetricsAreDistinctAndEqualAcrossDetailModes() throws Exception {
+        List<List<Point>> splitColumn = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/invariance/inv_column_extra_pen_lift.json"));
+        List<List<Point>> canonicalColumn = loadStrokes(
+                new File("src/test/resources/fixtures/canonical/positive/sign_column.json"));
+
+        SymbolRecognitionResult runtime = PointCloudRecognizer.recognizeStatic(
+                splitColumn, SymbolKind.SIGN, ParseDetail.RUNTIME);
+        SymbolRecognitionResult preview = PointCloudRecognizer.recognizeStatic(
+                splitColumn, SymbolKind.SIGN, ParseDetail.PREVIEW);
+        SymbolRecognitionResult full = PointCloudRecognizer.recognizeStatic(
+                splitColumn, SymbolKind.SIGN, ParseDetail.FULL_DIAGNOSTICS);
+        SymbolRecognitionResult canonical = PointCloudRecognizer.recognizeStatic(
+                canonicalColumn, SymbolKind.SIGN, ParseDetail.RUNTIME);
+
+        assertTrue(runtime.recognized());
+        assertTrue(canonical.recognized());
+        assertEquals(runtime.qualityMetrics(), preview.qualityMetrics());
+        assertEquals(runtime.qualityMetrics(), full.qualityMetrics());
+        assertTrue(runtime.alternatives().isEmpty());
+        assertTrue(preview.alternatives().isEmpty());
+        assertFalse(full.alternatives().isEmpty());
+        var metrics = runtime.qualityMetrics();
+        assertTrue(
+                Math.abs(metrics.templateCoverage() - runtime.score()) > 1.0e-6
+                        || Math.abs(metrics.candidateExplainedRatio() - runtime.score()) > 1.0e-6
+                        || Math.abs(metrics.structuralScore() - runtime.score()) > 1.0e-6,
+                "Direct quality diagnostics must not collapse back to confidence");
+        double splitPrecision = SpellQualityAnalyzer.symbolPrecision(
+                runtime.score(), runtime.qualityMetrics());
+        double canonicalPrecision = SpellQualityAnalyzer.symbolPrecision(
+                canonical.score(), canonical.qualityMetrics());
+        assertTrue(
+                splitPrecision >= canonicalPrecision - 0.15,
+                "One harmless pen lift must not cause a severe quality collapse");
     }
 
     @Test

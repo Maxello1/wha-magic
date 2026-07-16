@@ -41,6 +41,8 @@ public final class SpellCompiler {
                 result.compiledSigils(),
                 result.compiledSigns(),
                 result.geometry(),
+                result.quality(),
+                result.parameters(),
                 result.displayName(),
                 "Invalid: " + detail);
     }
@@ -78,6 +80,7 @@ public final class SpellCompiler {
                     sigil.element(),
                     sigil.semantic(),
                     sigil.recognitionConfidence(),
+                    sigil.qualityMetrics(),
                     sigil.centroid(),
                     sigil.bounds(),
                     sigil.orientationDeg(),
@@ -103,6 +106,7 @@ public final class SpellCompiler {
                     sign.matchedTemplateId(),
                     sign.semantic(),
                     sign.confidence(),
+                    sign.qualityMetrics(),
                     sign.angleAroundRing(),
                     sign.orientationDeg(),
                     radialPosition,
@@ -176,12 +180,24 @@ public final class SpellCompiler {
             statusMessage += " (" + warning.name() + ")";
         }
 
+        SpellGeometry geometry = compileGeometry(ast.ring(), compiledSigns);
+        SpellQuality quality = SpellQualityAnalyzer.analyze(
+                geometry, compiledSigils, compiledSigns, ast.unknownInk());
+        SpellParameters parameters = SpellParameterCalculator.calculate(
+                compiledSigils,
+                compiledSigns,
+                geometry,
+                quality,
+                MagicScalingSettings.fromConfig());
+
         return new SpellIr(
                 state,
                 warning,
                 compiledSigils,
                 compiledSigns,
-                compileGeometry(ast.ring(), compiledSigns),
+                geometry,
+                quality,
+                parameters,
                 displayName,
                 statusMessage);
     }

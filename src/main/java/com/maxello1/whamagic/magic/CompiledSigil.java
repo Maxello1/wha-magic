@@ -15,6 +15,7 @@ public record CompiledSigil(
         ElementType element,
         SigilSemantic semantic,
         double recognitionConfidence,
+        RecognitionQualityMetrics qualityMetrics,
         Point centroid,
         BoundingBox bounds,
         double orientationDegrees,
@@ -26,10 +27,30 @@ public record CompiledSigil(
         displayName = Objects.requireNonNull(displayName, "displayName");
         element = Objects.requireNonNull(element, "element");
         semantic = Objects.requireNonNull(semantic, "semantic");
+        qualityMetrics = qualityMetrics == null
+                ? RecognitionQualityMetrics.NEUTRAL
+                : qualityMetrics;
         centroid = Objects.requireNonNull(centroid, "centroid");
         bounds = Objects.requireNonNull(bounds, "bounds");
         sourceStrokeIndices = sourceStrokeIndices == null
                 ? List.of()
                 : List.copyOf(sourceStrokeIndices);
+    }
+
+    /** Compatibility constructor for compiled data without direct quality metrics. */
+    public CompiledSigil(
+            Identifier semanticId,
+            String matchedTemplateId,
+            String displayName,
+            ElementType element,
+            SigilSemantic semantic,
+            double recognitionConfidence,
+            Point centroid,
+            BoundingBox bounds,
+            double orientationDegrees,
+            List<Integer> sourceStrokeIndices) {
+        this(semanticId, matchedTemplateId, displayName, element, semantic,
+                recognitionConfidence, RecognitionQualityMetrics.NEUTRAL,
+                centroid, bounds, orientationDegrees, sourceStrokeIndices);
     }
 }

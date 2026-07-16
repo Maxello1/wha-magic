@@ -6,8 +6,12 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.maxello1.whamagic.magic.RecognitionAlternative;
+import com.maxello1.whamagic.magic.RecognitionQualityMetrics;
 import com.maxello1.whamagic.magic.RecognizedSigil;
 import com.maxello1.whamagic.magic.RecognizedSign;
+import com.maxello1.whamagic.magic.SpellGeometry;
+import com.maxello1.whamagic.magic.SpellParameters;
+import com.maxello1.whamagic.magic.SpellQuality;
 import com.maxello1.whamagic.magic.UnknownSymbol;
 import com.maxello1.whamagic.parser.Point;
 import com.maxello1.whamagic.parser.PointCloudRecognizer;
@@ -172,7 +176,7 @@ public final class SampleRecorder {
             LocalDateTime recordedAt) {
         SpellDictionary.DictionarySnapshot dictionary = SpellDictionary.snapshot();
         JsonObject sample = new JsonObject();
-        sample.addProperty("formatVersion", 4);
+        sample.addProperty("formatVersion", 5);
         sample.addProperty("recognizerVersion", PointCloudRecognizer.RECOGNIZER_VERSION);
         sample.addProperty("dictionaryVersion", dictionary.version());
         sample.addProperty("dictionaryHash", dictionary.hash());
@@ -187,6 +191,13 @@ public final class SampleRecorder {
         sample.addProperty("timestamp", recordedAt.toString());
         sample.add("rawStrokes", rawStrokesJson(rawStrokes));
         if (result != null) {
+            if (result.ir.geometry() == null) {
+                sample.add("geometry", JsonNull.INSTANCE);
+            } else {
+                sample.add("geometry", geometryJson(result.ir.geometry()));
+            }
+            sample.add("quality", qualityJson(result.ir.quality()));
+            sample.add("parameters", parametersJson(result.ir.parameters()));
             sample.add("result", resultJson(result));
         }
         return sample;
@@ -211,6 +222,29 @@ public final class SampleRecorder {
             else entry.addProperty("rotationDeg", symbol.rotationDeg());
             json.add(entry);
         }
+        return json;
+    }
+
+    private static JsonObject geometryJson(SpellGeometry geometry) {
+        JsonObject json = new JsonObject();
+        json.add("ringCenter", pointJson(geometry.ringCenter()));
+        json.addProperty("ringRadius", geometry.ringRadius());
+        json.addProperty("ringArea", geometry.ringArea());
+        json.addProperty("normalizedRingDiameter", geometry.normalizedRingDiameter());
+        json.addProperty("ringCompleteness", geometry.ringCompleteness());
+        json.addProperty("ringCircularity", geometry.ringCircularity());
+        json.addProperty("ringNormalizedRmse", geometry.ringNormalizedRmse());
+        json.add("directionalBias", pointJson(geometry.directionalBias()));
+        json.addProperty("radialSymmetryScore", geometry.radialSymmetryScore());
+        json.addProperty("bilateralSymmetryScore", geometry.bilateralSymmetryScore());
+        json.addProperty("signBalanceScore", geometry.signBalanceScore());
+        return json;
+    }
+
+    private static JsonObject pointJson(Point point) {
+        JsonObject json = new JsonObject();
+        json.addProperty("x", point.x);
+        json.addProperty("y", point.y);
         return json;
     }
 
@@ -246,6 +280,34 @@ public final class SampleRecorder {
         return resultJson;
     }
 
+    private static JsonObject qualityJson(SpellQuality quality) {
+        JsonObject json = new JsonObject();
+        json.addProperty("overall", quality.overall());
+        json.addProperty("ringPrecision", quality.ringPrecision());
+        json.addProperty("sigilPrecision", quality.sigilPrecision());
+        json.addProperty("signPrecision", quality.signPrecision());
+        json.addProperty("layoutPrecision", quality.layoutPrecision());
+        json.addProperty("inkCleanliness", quality.inkCleanliness());
+        json.addProperty("stability", quality.stability());
+        json.addProperty("tier", quality.tier().name().toLowerCase(Locale.ROOT));
+        return json;
+    }
+
+    private static JsonObject parametersJson(SpellParameters parameters) {
+        JsonObject json = new JsonObject();
+        json.addProperty("sizeScale", parameters.sizeScale());
+        json.addProperty("sizeTier", parameters.sizeTier().name().toLowerCase(Locale.ROOT));
+        json.addProperty("qualityEfficiency", parameters.qualityEfficiency());
+        json.addProperty("powerMultiplier", parameters.powerMultiplier());
+        json.addProperty("rangeMultiplier", parameters.rangeMultiplier());
+        json.addProperty("radiusMultiplier", parameters.radiusMultiplier());
+        json.addProperty("durationMultiplier", parameters.durationMultiplier());
+        json.addProperty("speedMultiplier", parameters.speedMultiplier());
+        json.addProperty("forceMultiplier", parameters.forceMultiplier());
+        json.addProperty("stability", parameters.stability());
+        return json;
+    }
+
     private static JsonArray sigilsJson(List<RecognizedSigil> sigils) {
         JsonArray sigilsJson = new JsonArray();
         if (sigils == null) {
@@ -257,6 +319,7 @@ public final class SampleRecorder {
             sigilJson.addProperty("matchedTemplateId", sigil.matchedTemplateId());
             sigilJson.addProperty("element", sigil.element() != null ? sigil.element().name() : "null");
             sigilJson.addProperty("confidence", round(sigil.recognitionConfidence(), 1000.0));
+            sigilJson.add("qualityMetrics", qualityMetricsJson(sigil.qualityMetrics()));
             sigilJson.addProperty("rejectionReason", sigil.rejectionReason().name());
             sigilJson.add("sourceStrokeIndices", GSON.toJsonTree(sigil.sourceStrokeIndices()));
             addAlternatives(sigilJson, sigil.alternatives());
@@ -275,11 +338,21 @@ public final class SampleRecorder {
             signJson.addProperty("id", sign.id());
             signJson.addProperty("matchedTemplateId", sign.matchedTemplateId());
             signJson.addProperty("confidence", round(sign.confidence(), 1000.0));
+            signJson.add("qualityMetrics", qualityMetricsJson(sign.qualityMetrics()));
             signJson.addProperty("angleAroundRing", round(sign.angleAroundRing(), 100.0));
             signJson.add("sourceStrokeIndices", GSON.toJsonTree(sign.sourceStrokeIndices()));
             signsJson.add(signJson);
         }
         return signsJson;
+    }
+
+    private static JsonObject qualityMetricsJson(RecognitionQualityMetrics metrics) {
+        JsonObject json = new JsonObject();
+        json.addProperty("templateCoverage", metrics.templateCoverage());
+        json.addProperty("candidateExplainedRatio", metrics.candidateExplainedRatio());
+        json.addProperty("unexplainedInkRatio", metrics.unexplainedInkRatio());
+        json.addProperty("structuralScore", metrics.structuralScore());
+        return json;
     }
 
     private static JsonArray unknownsJson(List<UnknownSymbol> unknowns) {

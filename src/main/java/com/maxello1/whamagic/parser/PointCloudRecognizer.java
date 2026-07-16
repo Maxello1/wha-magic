@@ -20,6 +20,7 @@
 package com.maxello1.whamagic.parser;
 
 import com.maxello1.whamagic.magic.RecognitionAlternative;
+import com.maxello1.whamagic.magic.RecognitionQualityMetrics;
 import com.maxello1.whamagic.magic.RecognitionRejectionReason;
 import com.maxello1.whamagic.magic.SigilSemantic;
 import com.maxello1.whamagic.magic.SignSemantic;
@@ -67,6 +68,16 @@ public final class PointCloudRecognizer {
 
     /** Weight of turning angle in $P+ distance calculation. */
     private static final double ANGLE_WEIGHT = 0.15;
+    /** Residuals below this normalized distance receive full quality credit. */
+    private static final double QUALITY_FULL_CREDIT_RESIDUAL = 0.015;
+    /** Residuals at or above this distance are considered unexplained. */
+    private static final double QUALITY_ZERO_CREDIT_RESIDUAL = 0.22;
+    private static final double QUALITY_CONTOUR_STRUCTURE_WEIGHT = 0.30;
+    private static final double QUALITY_COMPLEXITY_STRUCTURE_WEIGHT = 0.25;
+    private static final double QUALITY_DIMENSION_STRUCTURE_WEIGHT = 0.25;
+    private static final double QUALITY_STROKE_STRUCTURE_WEIGHT = 0.20;
+    /** Keeps extra pen lifts a minor structural influence after recognition. */
+    private static final double QUALITY_STROKE_COUNT_EXPONENT = 0.25;
 
     /** Closed templates above this value are meaningfully asymmetric. */
     private static final double ASYMMETRIC_TEMPLATE_MIN = 0.06;
@@ -489,6 +500,12 @@ public final class PointCloudRecognizer {
         SymbolRecognitionRules bestRules = best.group.recognitionRules;
         RecognitionRejectionReason reason = acceptanceReason(
                 best.score, secondScore, best.structuralRejection, bestRules);
+        RecognitionQualityMetrics qualityMetrics = recognitionQualityMetrics(
+                candidate,
+                workspace,
+                best.template,
+                bestRules,
+                best.structuralRejection);
         boolean recognized = reason == RecognitionRejectionReason.NONE;
         String displayName = recognized
                 ? best.group.displayName
@@ -516,9 +533,116 @@ public final class PointCloudRecognizer {
                 gap,
                 bestRules.minimumScore(),
                 reason,
-                best.score,
-                1.0 - best.score,
-                best.score);
+                qualityMetrics);
+    }
+
+    /**
+     * Direct drawing diagnostics for the selected template. These values never
+     * participate in recognition acceptance; they only grade an accepted result.
+     */
+    private static RecognitionQualityMetrics recognitionQualityMetrics(
+            PreparedCandidate candidate,
+            RotationWorkspace workspace,
+            PointCloudTemplate template,
+            SymbolRecognitionRules rules,
+            RecognitionRejectionReason structuralRejection) {
+        double candidateExplained = directionalExplanationScore(
+                workspace, template.points, false);
+        double templateCoverage = directionalExplanationScore(
+                workspace, template.points, true);
+        double structuralScore = structuralQualityScore(
+                candidate,
+                workspace,
+                template,
+                rules,
+                structuralRejection);
+        return new RecognitionQualityMetrics(
+                templateCoverage,
+                candidateExplained,
+                1.0 - candidateExplained,
+                structuralScore);
+    }
+
+    private static double directionalExplanationScore(
+            RotationWorkspace candidate,
+            CloudPoint[] template,
+            boolean templateToCandidate) {
+        double total = 0.0;
+        for (int source = 0; source < N; source++) {
+            double nearest = Double.POSITIVE_INFINITY;
+            for (int target = 0; target < N; target++) {
+                double distance = templateToCandidate
+                        ? preparedDistance(candidate, target, template[source])
+                        : preparedDistance(candidate, source, template[target]);
+                nearest = Math.min(nearest, distance);
+            }
+            total += residualExplanationScore(nearest);
+        }
+        return clamp01(total / N);
+    }
+
+    private static double residualExplanationScore(double residual) {
+        return 1.0 - clamp01(
+                (residual - QUALITY_FULL_CREDIT_RESIDUAL)
+                        / (QUALITY_ZERO_CREDIT_RESIDUAL
+                                - QUALITY_FULL_CREDIT_RESIDUAL));
+    }
+
+    private static double structuralQualityScore(
+            PreparedCandidate candidate,
+            RotationWorkspace workspace,
+            PointCloudTemplate template,
+            SymbolRecognitionRules rules,
+            RecognitionRejectionReason structuralRejection) {
+        if (structuralRejection != RecognitionRejectionReason.NONE) return 0.0;
+
+        int requiredClosedContours = rules.minimumClosedContours() >= 0
+                ? rules.minimumClosedContours()
+                : template.requiredClosedContourCount;
+        double contourScore = requiredClosedContours <= 0
+                ? 1.0
+                : clamp01((double) workspace.closedContourCount / requiredClosedContours);
+        double complexityScore = thresholdMarginScore(
+                workspace.complexity, rules.minimumComplexity());
+        double dimensionScore = rules.allowLineLike()
+                ? 1.0
+                : thresholdMarginScore(
+                        workspace.dimensionRatio, rules.minimumDimensionRatio());
+
+        int softMinimum = rules.softMinimumStrokeCount();
+        int softMaximum = rules.softMaximumStrokeCount() == 0
+                ? template.strokeCount
+                : rules.softMaximumStrokeCount();
+        double strokeScore = 1.0;
+        if (softMinimum > 0 && candidate.strokeCount < softMinimum) {
+            strokeScore = Math.pow(
+                    (double) candidate.strokeCount / softMinimum,
+                    QUALITY_STROKE_COUNT_EXPONENT);
+        }
+        if (softMaximum > 0 && candidate.strokeCount > softMaximum) {
+            strokeScore = Math.min(
+                    strokeScore,
+                    Math.pow(
+                            (double) softMaximum / candidate.strokeCount,
+                            QUALITY_STROKE_COUNT_EXPONENT));
+        }
+
+        return clamp01(
+                QUALITY_CONTOUR_STRUCTURE_WEIGHT * contourScore
+                        + QUALITY_COMPLEXITY_STRUCTURE_WEIGHT * complexityScore
+                        + QUALITY_DIMENSION_STRUCTURE_WEIGHT * dimensionScore
+                        + QUALITY_STROKE_STRUCTURE_WEIGHT * strokeScore);
+    }
+
+    /** A just-passing structural measurement scores 2/3; 25% margin reaches 1. */
+    private static double thresholdMarginScore(double value, double threshold) {
+        if (threshold <= 0.0) return 1.0;
+        return clamp01((value / threshold - 0.5) / 0.75);
+    }
+
+    private static double clamp01(double value) {
+        if (!Double.isFinite(value)) return 0.0;
+        return Math.max(0.0, Math.min(1.0, value));
     }
 
     private static TemplateScore scorePreparedVariant(

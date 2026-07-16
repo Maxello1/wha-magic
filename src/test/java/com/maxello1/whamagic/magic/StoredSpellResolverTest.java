@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StoredSpellResolverTest {
@@ -59,7 +60,7 @@ class StoredSpellResolverTest {
     }
 
     @Test
-    void currentV3CacheDoesNotInvokeParser() {
+    void currentV4CacheDoesNotInvokeParser() {
         StoredSpell cached = StoredSpell.fromIr(authoritativeIr(), STROKES);
         AtomicInteger parseCalls = new AtomicInteger();
 
@@ -78,7 +79,7 @@ class StoredSpellResolverTest {
     }
 
     @Test
-    void realParsedSpellProducesCurrentV3Cache() throws Exception {
+    void realParsedSpellProducesCurrentV4Cache() throws Exception {
         JsonObject fixture = JsonParser.parseString(Files.readString(Path.of(
                 "src/test/resources/fixtures/canonical/multi/spell_light_complete.json")))
                 .getAsJsonObject();
@@ -130,7 +131,14 @@ class StoredSpellResolverTest {
     }
 
     @Test
-    void v2MigrationReparsesOnceThenUsesRefreshedV3Cache() {
+    void staleScalingFingerprintReparsesExactlyOnceAndRefreshesComponent() {
+        assertSuccessfulRefresh(withStringField(
+                StoredSpell.fromIr(authoritativeIr(), STROKES),
+                "scalingSettingsFingerprint", "obsolete-scaling-settings"));
+    }
+
+    @Test
+    void v2MigrationReparsesOnceThenUsesRefreshedV4Cache() {
         JsonObject v2Json = JsonParser.parseString("""
                 {
                   "formatVersion": 2,
@@ -174,7 +182,7 @@ class StoredSpellResolverTest {
         StoredSpellResolver.Resolution cached = StoredSpellResolver.resolve(
                 refreshed, STROKES, strokes -> {
                     parseCalls.incrementAndGet();
-                    throw new AssertionError("Refreshed V3 data must not parse again");
+                    throw new AssertionError("Refreshed V4 data must not parse again");
                 });
 
         assertAll(
@@ -187,6 +195,51 @@ class StoredSpellResolverTest {
                 () -> assertEquals(StoredSpell.FORMAT_VERSION, refreshed.formatVersion()),
                 () -> assertFalse(cached.reparsed()),
                 () -> assertEquals(1, parseCalls.get(), "Migration must invoke parsing exactly once"));
+    }
+
+    @Test
+    void v3MigrationReparsesOnceThenUsesRefreshedV4Cache() {
+        JsonObject v3Json = currentJson();
+        v3Json.addProperty("formatVersion", 3);
+        v3Json.remove("quality");
+        v3Json.remove("parameters");
+        v3Json.remove("scalingSettingsFingerprint");
+        v3Json.getAsJsonArray("compiledSigils").forEach(element ->
+                element.getAsJsonObject().remove("qualityMetrics"));
+        v3Json.getAsJsonArray("compiledSigns").forEach(element ->
+                element.getAsJsonObject().remove("qualityMetrics"));
+
+        StoredSpell v3 = StoredSpell.CODEC.parse(JsonOps.INSTANCE, v3Json)
+                .result().orElseThrow(() -> new AssertionError("V3 must decode safely"));
+        StoredSpell networkV3 = streamRoundTrip(v3);
+        AtomicInteger parseCalls = new AtomicInteger();
+
+        StoredSpellResolver.Resolution migrated = StoredSpellResolver.resolve(
+                v3, STROKES, strokes -> {
+                    parseCalls.incrementAndGet();
+                    return new SpellParser.ParseResult(null, authoritativeIr());
+                });
+        StoredSpellResolver.Resolution cached = StoredSpellResolver.resolve(
+                migrated.refreshedSpell(), STROKES, strokes -> {
+                    parseCalls.incrementAndGet();
+                    throw new AssertionError("Refreshed V4 data must not parse again");
+                });
+
+        assertAll(
+                () -> assertEquals(3, v3.formatVersion()),
+                () -> assertEquals(v3, networkV3),
+                () -> assertEquals(
+                        RecognitionQualityMetrics.NEUTRAL,
+                        v3.compiledSigils().getFirst().qualityMetrics()),
+                () -> assertEquals(SpellQuality.UNASSESSED, v3.quality()),
+                () -> assertEquals(SpellParameters.NEUTRAL, v3.parameters()),
+                () -> assertTrue(migrated.reparsed()),
+                () -> assertNotNull(migrated.refreshedSpell()),
+                () -> assertEquals(StoredSpell.FORMAT_VERSION,
+                        migrated.refreshedSpell().formatVersion()),
+                () -> assertFalse(cached.reparsed()),
+                () -> assertEquals(1, parseCalls.get(),
+                        "V3 migration must invoke parsing exactly once"));
     }
 
     @Test
@@ -214,6 +267,14 @@ class StoredSpellResolverTest {
                 () -> assertEquals(2, persistent.compiledSigils().size()),
                 () -> assertEquals(4, persistent.compiledSigns().size()),
                 () -> assertEquals(expected.geometry(), persistent.geometry()),
+                () -> assertEquals(expected.quality(), persistent.quality()),
+                () -> assertEquals(expected.parameters(), persistent.parameters()),
+                () -> assertEquals(
+                        expected.scalingSettingsFingerprint(),
+                        persistent.scalingSettingsFingerprint()),
+                () -> assertEquals(
+                        expected.compiledSigils().getFirst().qualityMetrics(),
+                        persistent.compiledSigils().getFirst().qualityMetrics()),
                 () -> assertEquals(expected.compiledSigns().get(0).sourceStrokeIndices(),
                         persistent.compiledSigns().get(0).sourceStrokeIndices()));
     }
@@ -263,6 +324,93 @@ class StoredSpellResolverTest {
     }
 
     @Test
+    void authoritySignatureCoversEveryQualityMetricAndDerivedParameter() {
+        SpellIr baseIr = authoritativeIr();
+        StoredSpell base = StoredSpell.fromIr(baseIr, STROKES);
+        SpellQuality quality = baseIr.quality();
+        SpellParameters parameters = baseIr.parameters();
+
+        List<SpellQuality> qualityVariants = List.of(
+                new SpellQuality(0.83, quality.ringPrecision(), quality.sigilPrecision(),
+                        quality.signPrecision(), quality.layoutPrecision(),
+                        quality.inkCleanliness(), quality.stability(), QualityTier.REFINED),
+                new SpellQuality(quality.overall(), 0.91, quality.sigilPrecision(),
+                        quality.signPrecision(), quality.layoutPrecision(),
+                        quality.inkCleanliness(), quality.stability(), quality.tier()),
+                new SpellQuality(quality.overall(), quality.ringPrecision(), 0.85,
+                        quality.signPrecision(), quality.layoutPrecision(),
+                        quality.inkCleanliness(), quality.stability(), quality.tier()),
+                new SpellQuality(quality.overall(), quality.ringPrecision(),
+                        quality.sigilPrecision(), 0.80, quality.layoutPrecision(),
+                        quality.inkCleanliness(), quality.stability(), quality.tier()),
+                new SpellQuality(quality.overall(), quality.ringPrecision(),
+                        quality.sigilPrecision(), quality.signPrecision(), 0.81,
+                        quality.inkCleanliness(), quality.stability(), quality.tier()),
+                new SpellQuality(quality.overall(), quality.ringPrecision(),
+                        quality.sigilPrecision(), quality.signPrecision(),
+                        quality.layoutPrecision(), 0.94, quality.stability(), quality.tier()),
+                new SpellQuality(quality.overall(), quality.ringPrecision(),
+                        quality.sigilPrecision(), quality.signPrecision(),
+                        quality.layoutPrecision(), quality.inkCleanliness(), 0.85, quality.tier()),
+                new SpellQuality(quality.overall(), quality.ringPrecision(),
+                        quality.sigilPrecision(), quality.signPrecision(),
+                        quality.layoutPrecision(), quality.inkCleanliness(),
+                        quality.stability(), QualityTier.SERVICEABLE));
+
+        List<SpellParameters> parameterVariants = List.of(
+                parametersCopy(parameters, "sizeScale"),
+                parametersCopy(parameters, "sizeTier"),
+                parametersCopy(parameters, "qualityEfficiency"),
+                parametersCopy(parameters, "powerMultiplier"),
+                parametersCopy(parameters, "rangeMultiplier"),
+                parametersCopy(parameters, "radiusMultiplier"),
+                parametersCopy(parameters, "durationMultiplier"),
+                parametersCopy(parameters, "speedMultiplier"),
+                parametersCopy(parameters, "forceMultiplier"),
+                parametersCopy(parameters, "stability"));
+
+        for (SpellQuality variant : qualityVariants) {
+            assertNotEquals(
+                    base.authoritySignature(),
+                    StoredSpell.fromIr(withQuality(baseIr, variant), STROKES)
+                            .authoritySignature());
+        }
+        for (SpellParameters variant : parameterVariants) {
+            assertNotEquals(
+                    base.authoritySignature(),
+                    StoredSpell.fromIr(withParameters(baseIr, variant), STROKES)
+                            .authoritySignature());
+        }
+
+        CompiledSigil firstSigil = baseIr.compiledSigils().getFirst();
+        RecognitionQualityMetrics metrics = firstSigil.qualityMetrics();
+        CompiledSigil metricsChanged = new CompiledSigil(
+                firstSigil.semanticId(),
+                firstSigil.matchedTemplateId(),
+                firstSigil.displayName(),
+                firstSigil.element(),
+                firstSigil.semantic(),
+                firstSigil.recognitionConfidence(),
+                new RecognitionQualityMetrics(
+                        metrics.templateCoverage() - 0.01,
+                        metrics.candidateExplainedRatio(),
+                        metrics.unexplainedInkRatio(),
+                        metrics.structuralScore()),
+                firstSigil.centroid(),
+                firstSigil.bounds(),
+                firstSigil.orientationDegrees(),
+                firstSigil.sourceStrokeIndices());
+        StoredSpell metricsVariant = StoredSpell.fromIr(
+                withFirstSigil(baseIr, metricsChanged), STROKES);
+
+        assertAll(
+                () -> assertNotEquals(
+                        base.authoritySignature(), metricsVariant.authoritySignature()),
+                () -> assertFalse(withAuthoritySignature(
+                        metricsVariant, base.authoritySignature()).isCurrentFor(STROKES)));
+    }
+
+    @Test
     void malformedAndNonFiniteGeometryOrSemanticsAreRejected() {
         SpellIr base = authoritativeIr();
         SpellGeometry nonFiniteGeometry = new SpellGeometry(
@@ -289,7 +437,8 @@ class StoredSpellResolverTest {
         SpellIr invalidSemantic = new SpellIr(
                 base.state(), base.warning(),
                 replaceFirst(base.compiledSigils(), invalidSemanticSigil),
-                base.compiledSigns(), base.geometry(), base.displayName(), base.statusMessage());
+                base.compiledSigns(), base.geometry(), base.quality(), base.parameters(),
+                base.displayName(), base.statusMessage());
 
         StoredSpell invalidRadius = StoredSpell.fromIr(withGeometry(base, nonFiniteGeometry), STROKES);
         StoredSpell invalidBias = StoredSpell.fromIr(withGeometry(base, nonFiniteBias), STROKES);
@@ -317,6 +466,132 @@ class StoredSpellResolverTest {
                         JsonOps.INSTANCE, invalidLayer).error().isPresent()),
                 () -> assertTrue(StoredSpell.CODEC.parse(
                         JsonOps.INSTANCE, invalidManifestation).error().isPresent()));
+    }
+
+    @Test
+    void malformedMissingOrNonFiniteQualityAndParametersAreRejected() {
+        JsonObject encoded = currentJson();
+        JsonObject missingQuality = encoded.deepCopy();
+        missingQuality.remove("quality");
+        JsonObject missingParameters = encoded.deepCopy();
+        missingParameters.remove("parameters");
+        JsonObject missingFingerprint = encoded.deepCopy();
+        missingFingerprint.remove("scalingSettingsFingerprint");
+        JsonObject missingMetrics = encoded.deepCopy();
+        missingMetrics.getAsJsonArray("compiledSigils").get(0).getAsJsonObject()
+                .remove("qualityMetrics");
+
+        JsonObject nonFiniteQuality = encoded.deepCopy();
+        nonFiniteQuality.getAsJsonObject("quality")
+                .addProperty("overall", Double.NaN);
+        JsonObject outOfRangeQuality = encoded.deepCopy();
+        outOfRangeQuality.getAsJsonObject("quality")
+                .addProperty("ringPrecision", 1.01);
+        JsonObject mismatchedQualityTier = encoded.deepCopy();
+        mismatchedQualityTier.getAsJsonObject("quality")
+                .addProperty("tier", "flawed");
+        JsonObject outOfRangeMetrics = encoded.deepCopy();
+        outOfRangeMetrics.getAsJsonArray("compiledSigns").get(0).getAsJsonObject()
+                .getAsJsonObject("qualityMetrics")
+                .addProperty("candidateExplainedRatio", -0.01);
+
+        JsonObject negativeParameter = encoded.deepCopy();
+        negativeParameter.getAsJsonObject("parameters")
+                .addProperty("rangeMultiplier", -0.01);
+        JsonObject nonFiniteParameter = encoded.deepCopy();
+        nonFiniteParameter.getAsJsonObject("parameters")
+                .addProperty("powerMultiplier", Double.NaN);
+        JsonObject parameterAboveSchemaCap = encoded.deepCopy();
+        parameterAboveSchemaCap.getAsJsonObject("parameters")
+                .addProperty("durationMultiplier", 16.01);
+        JsonObject mismatchedSizeTier = encoded.deepCopy();
+        mismatchedSizeTier.getAsJsonObject("parameters")
+                .addProperty("sizeTier", "grand");
+        JsonObject mismatchedStability = encoded.deepCopy();
+        mismatchedStability.getAsJsonObject("parameters")
+                .addProperty("stability", 0.25);
+
+        assertAll(
+                () -> assertCodecRejects(missingQuality),
+                () -> assertCodecRejects(missingParameters),
+                () -> assertCodecRejects(missingFingerprint),
+                () -> assertCodecRejects(missingMetrics),
+                () -> assertCodecRejects(nonFiniteQuality),
+                () -> assertCodecRejects(outOfRangeQuality),
+                () -> assertCodecRejects(mismatchedQualityTier),
+                () -> assertCodecRejects(outOfRangeMetrics),
+                () -> assertCodecRejects(negativeParameter),
+                () -> assertCodecRejects(nonFiniteParameter),
+                () -> assertCodecRejects(parameterAboveSchemaCap),
+                () -> assertCodecRejects(mismatchedSizeTier),
+                () -> assertCodecRejects(mismatchedStability));
+    }
+
+    @Test
+    void streamCodecRejectsRawOutOfRangeMetricsBeforeRecordClamping() {
+        StoredSpell expected = StoredSpell.fromIr(authoritativeIr(), STROKES);
+        RegistryFriendlyByteBuf buffer = new RegistryFriendlyByteBuf(
+                Unpooled.buffer(), RegistryAccess.EMPTY);
+        try {
+            StoredSpell.STREAM_CODEC.encode(buffer, expected);
+            long encodedMetric = Double.doubleToLongBits(
+                    expected.compiledSigils().getFirst().qualityMetrics().templateCoverage());
+            int metricOffset = -1;
+            for (int offset = 0; offset <= buffer.writerIndex() - Long.BYTES; offset++) {
+                if (buffer.getLong(offset) == encodedMetric) {
+                    metricOffset = offset;
+                    break;
+                }
+            }
+            assertTrue(metricOffset >= 0, "Expected metric must exist in encoded payload");
+            buffer.setLong(metricOffset, Double.doubleToLongBits(2.0));
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> StoredSpell.STREAM_CODEC.decode(buffer));
+        } finally {
+            buffer.release();
+        }
+    }
+
+    @Test
+    void streamCodecRefusesToEncodeParametersAboveAbsoluteSchemaCaps() {
+        StoredSpell valid = StoredSpell.fromIr(authoritativeIr(), STROKES);
+        SpellParameters source = valid.parameters();
+        SpellParameters invalidParameters = new SpellParameters(
+                source.sizeScale(),
+                source.sizeTier(),
+                source.qualityEfficiency(),
+                source.powerMultiplier(),
+                source.rangeMultiplier(),
+                source.radiusMultiplier(),
+                16.01,
+                source.speedMultiplier(),
+                source.forceMultiplier(),
+                source.stability());
+        StoredSpell invalid = new StoredSpell(
+                valid.formatVersion(),
+                valid.state(),
+                valid.compiledSigils(),
+                valid.compiledSigns(),
+                valid.geometry(),
+                valid.quality(),
+                invalidParameters,
+                valid.displayName(),
+                valid.strokeHash(),
+                valid.dictionaryVersion(),
+                valid.dictionaryHash(),
+                valid.recognizerVersion(),
+                valid.scalingSettingsFingerprint(),
+                valid.authoritySignature());
+        RegistryFriendlyByteBuf buffer = new RegistryFriendlyByteBuf(
+                Unpooled.buffer(), RegistryAccess.EMPTY);
+        try {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> StoredSpell.STREAM_CODEC.encode(buffer, invalid));
+        } finally {
+            buffer.release();
+        }
     }
 
     @Test
@@ -434,8 +709,9 @@ class StoredSpellResolverTest {
     private static StoredSpell withAuthoritySignature(StoredSpell spell, String signature) {
         return new StoredSpell(
                 spell.formatVersion(), spell.state(), spell.compiledSigils(), spell.compiledSigns(),
-                spell.geometry(), spell.displayName(), spell.strokeHash(), spell.dictionaryVersion(),
-                spell.dictionaryHash(), spell.recognizerVersion(), signature);
+                spell.geometry(), spell.quality(), spell.parameters(), spell.displayName(),
+                spell.strokeHash(), spell.dictionaryVersion(), spell.dictionaryHash(),
+                spell.recognizerVersion(), spell.scalingSettingsFingerprint(), signature);
     }
 
     private static SpellIr authoritativeIr() {
@@ -448,8 +724,11 @@ class StoredSpellResolverTest {
                 compiledSign(LEVITATION, LEVITATION_SEMANTIC, 180.0, 0.70, 180.0, 1),
                 compiledSign(LEVITATION, LEVITATION_SEMANTIC, 180.0, 0.70, 180.0, 0),
                 compiledSign(CONVERGENCE, CONVERGENCE_SEMANTIC, 0.0, 0.70, 0.0, 1));
+        SpellQuality quality = quality();
+        SpellParameters parameters = SpellParameterCalculator.calculate(
+                sigils, signs, geometry(), quality, MagicScalingSettings.fromConfig());
         return new SpellIr(
-                SpellState.ACTIVE, null, sigils, signs, geometry(),
+                SpellState.ACTIVE, null, sigils, signs, geometry(), quality, parameters,
                 "Earth + Wind [levitation x3, convergence x1]",
                 "Active: Earth + Wind [levitation x3, convergence x1]");
     }
@@ -461,8 +740,11 @@ class StoredSpellResolverTest {
         List<CompiledSign> signs = List.of(
                 compiledSign(CONVERGENCE, CONVERGENCE_SEMANTIC, 90.0, 0.82, 90.0, 1),
                 compiledSign(CONVERGENCE, CONVERGENCE_SEMANTIC, 270.0, 0.82, 270.0, 1));
+        SpellQuality quality = quality();
+        SpellParameters parameters = SpellParameterCalculator.calculate(
+                sigils, signs, geometry(), quality, MagicScalingSettings.fromConfig());
         return new SpellIr(
-                SpellState.ACTIVE, null, sigils, signs, geometry(),
+                SpellState.ACTIVE, null, sigils, signs, geometry(), quality, parameters,
                 "Fire [convergence x2]", "Active: Fire [convergence x2]");
     }
 
@@ -474,6 +756,7 @@ class StoredSpellResolverTest {
             int sourceIndex) {
         return new CompiledSigil(
                 id, id.getPath(), displayName, element, semantic, 0.92,
+                new RecognitionQualityMetrics(0.93, 0.91, 0.03, 0.89),
                 new Point(0.5, 0.5), new BoundingBox(0.42, 0.42, 0.58, 0.58),
                 0.0, List.of(sourceIndex));
     }
@@ -489,7 +772,9 @@ class StoredSpellResolverTest {
         double x = RING_CENTER.x + RING_RADIUS * radialPosition * Math.cos(radians);
         double y = RING_CENTER.y + RING_RADIUS * radialPosition * Math.sin(radians);
         return new CompiledSign(
-                id, id.getPath(), semantic, 0.88, angle, orientation, radialPosition,
+                id, id.getPath(), semantic, 0.88,
+                new RecognitionQualityMetrics(0.87, 0.90, 0.04, 0.86),
+                angle, orientation, radialPosition,
                 SpellLayer.fromRadialPosition(radialPosition),
                 new Point(x, y), new BoundingBox(x - 0.02, y - 0.02, x + 0.02, y + 0.02),
                 List.of(sourceIndex), false);
@@ -510,17 +795,93 @@ class StoredSpellResolverTest {
                 1.0);
     }
 
+    private static SpellQuality quality() {
+        return new SpellQuality(
+                0.82,
+                0.90,
+                0.84,
+                0.79,
+                0.80,
+                0.95,
+                0.84,
+                QualityTier.REFINED);
+    }
+
     private static SpellIr withGeometry(SpellIr ir, SpellGeometry geometry) {
         return new SpellIr(
                 ir.state(), ir.warning(), ir.compiledSigils(), ir.compiledSigns(), geometry,
-                ir.displayName(), ir.statusMessage());
+                ir.quality(), ir.parameters(), ir.displayName(), ir.statusMessage());
     }
 
     private static SpellIr withFirstSign(SpellIr ir, CompiledSign replacement) {
         return new SpellIr(
                 ir.state(), ir.warning(), ir.compiledSigils(),
                 replaceFirst(ir.compiledSigns(), replacement), ir.geometry(),
-                ir.displayName(), ir.statusMessage());
+                ir.quality(), ir.parameters(), ir.displayName(), ir.statusMessage());
+    }
+
+    private static SpellIr withFirstSigil(SpellIr ir, CompiledSigil replacement) {
+        return new SpellIr(
+                ir.state(), ir.warning(),
+                replaceFirst(ir.compiledSigils(), replacement), ir.compiledSigns(),
+                ir.geometry(), ir.quality(), ir.parameters(), ir.displayName(),
+                ir.statusMessage());
+    }
+
+    private static SpellIr withQuality(SpellIr ir, SpellQuality quality) {
+        return new SpellIr(
+                ir.state(), ir.warning(), ir.compiledSigils(), ir.compiledSigns(),
+                ir.geometry(), quality, ir.parameters(), ir.displayName(), ir.statusMessage());
+    }
+
+    private static SpellIr withParameters(SpellIr ir, SpellParameters parameters) {
+        return new SpellIr(
+                ir.state(), ir.warning(), ir.compiledSigils(), ir.compiledSigns(),
+                ir.geometry(), ir.quality(), parameters, ir.displayName(), ir.statusMessage());
+    }
+
+    private static SpellParameters parametersCopy(
+            SpellParameters source,
+            String changedField) {
+        double sizeScale = source.sizeScale();
+        SealSizeTier sizeTier = source.sizeTier();
+        double qualityEfficiency = source.qualityEfficiency();
+        double power = source.powerMultiplier();
+        double range = source.rangeMultiplier();
+        double radius = source.radiusMultiplier();
+        double duration = source.durationMultiplier();
+        double speed = source.speedMultiplier();
+        double force = source.forceMultiplier();
+        double stability = source.stability();
+        switch (changedField) {
+            case "sizeScale" -> {
+                sizeScale += 0.01;
+                sizeTier = SealSizeTier.fromScale(sizeScale);
+            }
+            case "sizeTier" -> sizeTier = sizeTier == SealSizeTier.TINY
+                    ? SealSizeTier.SMALL
+                    : SealSizeTier.TINY;
+            case "qualityEfficiency" -> qualityEfficiency += 0.01;
+            case "powerMultiplier" -> power += 0.01;
+            case "rangeMultiplier" -> range += 0.01;
+            case "radiusMultiplier" -> radius += 0.01;
+            case "durationMultiplier" -> duration += 0.01;
+            case "speedMultiplier" -> speed += 0.01;
+            case "forceMultiplier" -> force += 0.01;
+            case "stability" -> stability += 0.01;
+            default -> throw new IllegalArgumentException("Unknown parameter field: " + changedField);
+        }
+        return new SpellParameters(
+                sizeScale,
+                sizeTier,
+                qualityEfficiency,
+                power,
+                range,
+                radius,
+                duration,
+                speed,
+                force,
+                stability);
     }
 
     private static <T> List<T> replaceFirst(List<T> values, T replacement) {
@@ -560,6 +921,7 @@ class StoredSpellResolverTest {
                 source.semanticId(), source.matchedTemplateId(),
                 semantic == null ? source.semantic() : semantic,
                 source.confidence(),
+                source.qualityMetrics(),
                 angle == null ? source.angleAroundRing() : angle,
                 source.orientationDegrees(),
                 radialPosition == null ? source.radialPosition() : radialPosition,
@@ -572,5 +934,22 @@ class StoredSpellResolverTest {
         return StoredSpell.CODEC.encodeStart(
                         JsonOps.INSTANCE, StoredSpell.fromIr(authoritativeIr(), STROKES))
                 .result().orElseThrow().getAsJsonObject();
+    }
+
+    private static void assertCodecRejects(JsonObject payload) {
+        assertTrue(
+                StoredSpell.CODEC.parse(JsonOps.INSTANCE, payload).error().isPresent(),
+                () -> "Expected malformed stored spell to be rejected: " + payload);
+    }
+
+    private static StoredSpell streamRoundTrip(StoredSpell spell) {
+        RegistryFriendlyByteBuf buffer = new RegistryFriendlyByteBuf(
+                Unpooled.buffer(), RegistryAccess.EMPTY);
+        try {
+            StoredSpell.STREAM_CODEC.encode(buffer, spell);
+            return StoredSpell.STREAM_CODEC.decode(buffer);
+        } finally {
+            buffer.release();
+        }
     }
 }

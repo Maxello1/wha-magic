@@ -14,14 +14,42 @@ public record SpellIr(
         List<CompiledSigil> compiledSigils,
         List<CompiledSign> compiledSigns,
         SpellGeometry geometry,
+        SpellQuality quality,
+        SpellParameters parameters,
         String displayName,
         String statusMessage
 ) {
     public SpellIr {
         compiledSigils = compiledSigils == null ? List.of() : List.copyOf(compiledSigils);
         compiledSigns = compiledSigns == null ? List.of() : List.copyOf(compiledSigns);
+        quality = quality == null ? SpellQuality.UNASSESSED : quality;
+        parameters = parameters == null ? SpellParameters.NEUTRAL : parameters;
         displayName = displayName == null ? "" : displayName;
         statusMessage = statusMessage == null ? "" : statusMessage;
+    }
+
+    /**
+     * Compatibility constructor for drafts and legacy cache adapters that have not
+     * yet been assessed. Authoritative compilation supplies quality and parameters.
+     */
+    public SpellIr(
+            SpellState state,
+            GlyphWarning warning,
+            List<CompiledSigil> compiledSigils,
+            List<CompiledSign> compiledSigns,
+            SpellGeometry geometry,
+            String displayName,
+            String statusMessage) {
+        this(
+                state,
+                warning,
+                compiledSigils,
+                compiledSigns,
+                geometry,
+                SpellQuality.UNASSESSED,
+                SpellParameters.NEUTRAL,
+                displayName,
+                statusMessage);
     }
 
     /** Temporary execution compatibility view derived from compiled sigils. */

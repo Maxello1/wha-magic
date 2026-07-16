@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## [0.4.1] - 2026-07-16
+
+### Added
+
+- Added direct per-symbol recognition-quality metrics and deterministic spell-quality tiers.
+- Added ring-diameter size scaling, seal-size tiers, and centrally derived spell parameters.
+- Added compact quality, size, power, range, and duration estimates to spell previews and saved-paper tooltips.
+- Added detailed quality and parameter diagnostics to development previews and recorded samples.
+
+### Changed
+
+- Upgraded authoritative stored spells to format version 4 with authenticated quality, scaling settings, and derived parameters.
+- Made version 3 stored spells stale so they are recompiled once from raw strokes.
+- Scaled the existing Water, Fire, Wind, and Earth prototypes from bounded compiled parameters instead of repeated-sign counts.
+- Added configurable, validated magic-scaling references and multiplier caps.
+
+### Fixed
+
+- Capped elemental particle work, entity-query radii, effect durations, effect amplifiers, and Earth dimensions.
+
 ## [0.4.0] - 2026-07-16
 
 ### Added

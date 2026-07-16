@@ -21,13 +21,34 @@ public record SymbolRecognitionResult(
         double confidenceGap,
         double thresholdUsed,
         RecognitionRejectionReason rejectionReason,
-        double templateCoverage,
-        double unexplainedInkRatio,
-        double structuralScore
+        RecognitionQualityMetrics qualityMetrics
 ) {
     public SymbolRecognitionResult {
         alternatives = alternatives == null ? List.of() : List.copyOf(alternatives);
         rejectionReason = rejectionReason == null ? RecognitionRejectionReason.NONE : rejectionReason;
+        qualityMetrics = qualityMetrics == null
+                ? (recognized ? RecognitionQualityMetrics.NEUTRAL
+                        : RecognitionQualityMetrics.UNASSESSED)
+                : qualityMetrics;
+    }
+
+    /** Historical score-shaped diagnostic retained for compatibility snapshots. */
+    public double templateCoverage() {
+        return id == null ? 0.0 : score;
+    }
+
+    public double candidateExplainedRatio() {
+        return qualityMetrics.candidateExplainedRatio();
+    }
+
+    /** Historical score-shaped diagnostic retained for compatibility snapshots. */
+    public double unexplainedInkRatio() {
+        return id == null ? 0.0 : 1.0 - score;
+    }
+
+    /** Historical score-shaped diagnostic retained for compatibility snapshots. */
+    public double structuralScore() {
+        return id == null ? 0.0 : score;
     }
 
     /** Construct an early-exit rejection without template diagnostics. */
@@ -38,6 +59,6 @@ public record SymbolRecognitionResult(
         return new SymbolRecognitionResult(
                 false, null, null, displayName, null, null, 0.0,
                 null, null, List.of(), 0.0, thresholdUsed, reason,
-                0.0, 0.0, 0.0);
+                RecognitionQualityMetrics.UNASSESSED);
     }
 }

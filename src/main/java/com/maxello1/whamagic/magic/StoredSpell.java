@@ -21,7 +21,6 @@ import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -32,23 +31,31 @@ public record StoredSpell(
         List<CompiledSigil> compiledSigils,
         List<CompiledSign> compiledSigns,
         SpellGeometry geometry,
+        SpellQuality quality,
+        SpellParameters parameters,
         String displayName,
         int strokeHash,
         String dictionaryVersion,
         String dictionaryHash,
         String recognizerVersion,
+        String scalingSettingsFingerprint,
         String authoritySignature
 ) {
-    public static final int FORMAT_VERSION = 3;
+    public static final int FORMAT_VERSION = 4;
 
     private static final int MAX_COMPILED_SYMBOLS = CandidateGenerationSettings.DEFAULTS.maxCandidates();
     private static final int MAX_SOURCE_STROKES = 256;
+    private static final int MAX_SCALING_FINGERPRINT_LENGTH = 512;
     private static final double MIN_NORMALIZED_COORDINATE = -0.25;
     private static final double MAX_NORMALIZED_COORDINATE = 1.25;
     private static final double MIN_RING_RADIUS = 0.08;
     private static final double MAX_RING_RADIUS = 0.80;
     private static final double MAX_NORMALIZED_RADIAL_POSITION = 32.0;
     private static final double MAX_DIRECTIONAL_BIAS_MAGNITUDE = 1.0;
+    private static final double MIN_SCHEMA_SIZE_SCALE = 0.10;
+    private static final double MAX_SCHEMA_SIZE_SCALE = 4.0;
+    private static final double MAX_SCHEMA_MULTIPLIER = 8.0;
+    private static final double MAX_SCHEMA_DURATION_MULTIPLIER = 16.0;
     private static final double DERIVED_VALUE_TOLERANCE = 1.0e-9;
 
     private static final String AUTHORITY_ALGORITHM = "HmacSHA256";
@@ -74,6 +81,24 @@ public record StoredSpell(
     private static final Codec<SpellLayer> SPELL_LAYER_CODEC = Codec.STRING.comapFlatMap(
             value -> enumValue(SpellLayer.class, value, "spell layer"),
             layer -> layer.name().toLowerCase(Locale.ROOT));
+
+    private static final Codec<QualityTier> QUALITY_TIER_CODEC = Codec.STRING.comapFlatMap(
+            value -> enumValue(QualityTier.class, value, "quality tier"),
+            tier -> tier.name().toLowerCase(Locale.ROOT));
+
+    private static final Codec<SealSizeTier> SEAL_SIZE_TIER_CODEC = Codec.STRING.comapFlatMap(
+            value -> enumValue(SealSizeTier.class, value, "seal size tier"),
+            tier -> tier.name().toLowerCase(Locale.ROOT));
+
+    private static final Codec<Double> UNIT_INTERVAL_DOUBLE_CODEC = Codec.DOUBLE.validate(value ->
+            unitInterval(value)
+                    ? DataResult.success(value)
+                    : DataResult.error(() -> "Expected finite value in [0, 1]: " + value));
+
+    private static final Codec<Double> NON_NEGATIVE_FINITE_DOUBLE_CODEC = Codec.DOUBLE.validate(value ->
+            Double.isFinite(value) && value >= 0.0
+                    ? DataResult.success(value)
+                    : DataResult.error(() -> "Expected finite non-negative value: " + value));
 
     private static final Codec<Identifier> IDENTIFIER_CODEC = Codec.STRING.comapFlatMap(
             value -> {
@@ -114,35 +139,215 @@ public record StoredSpell(
                     Codec.DOUBLE.fieldOf("maxY").forGetter(BoundingBox::maxY)
             ).apply(instance, BoundingBox::new));
 
-    private static final Codec<CompiledSigil> COMPILED_SIGIL_CODEC = RecordCodecBuilder.create(instance ->
-            instance.group(
-                    IDENTIFIER_CODEC.fieldOf("semanticId").forGetter(CompiledSigil::semanticId),
-                    Codec.STRING.fieldOf("matchedTemplateId").forGetter(CompiledSigil::matchedTemplateId),
-                    Codec.STRING.fieldOf("displayName").forGetter(CompiledSigil::displayName),
-                    ELEMENT_TYPE_CODEC.fieldOf("element").forGetter(CompiledSigil::element),
-                    SIGIL_SEMANTIC_CODEC.fieldOf("semantic").forGetter(CompiledSigil::semantic),
-                    Codec.DOUBLE.fieldOf("recognitionConfidence").forGetter(CompiledSigil::recognitionConfidence),
-                    Point.CODEC.fieldOf("centroid").forGetter(CompiledSigil::centroid),
-                    BOUNDING_BOX_CODEC.fieldOf("bounds").forGetter(CompiledSigil::bounds),
-                    Codec.DOUBLE.fieldOf("orientationDegrees").forGetter(CompiledSigil::orientationDegrees),
-                    Codec.list(Codec.INT).fieldOf("sourceStrokeIndices").forGetter(CompiledSigil::sourceStrokeIndices)
-            ).apply(instance, CompiledSigil::new));
+    private static final Codec<RecognitionQualityMetrics> RECOGNITION_QUALITY_METRICS_CODEC =
+            RecordCodecBuilder.create(instance -> instance.group(
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("templateCoverage")
+                            .forGetter(RecognitionQualityMetrics::templateCoverage),
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("candidateExplainedRatio")
+                            .forGetter(RecognitionQualityMetrics::candidateExplainedRatio),
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("unexplainedInkRatio")
+                            .forGetter(RecognitionQualityMetrics::unexplainedInkRatio),
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("structuralScore")
+                            .forGetter(RecognitionQualityMetrics::structuralScore)
+            ).apply(instance, RecognitionQualityMetrics::new));
 
-    private static final Codec<CompiledSign> COMPILED_SIGN_CODEC = RecordCodecBuilder.create(instance ->
+    private static final Codec<SpellQuality> SPELL_QUALITY_CODEC =
+            RecordCodecBuilder.<SpellQuality>create(instance -> instance.group(
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("overall").forGetter(SpellQuality::overall),
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("ringPrecision")
+                            .forGetter(SpellQuality::ringPrecision),
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("sigilPrecision")
+                            .forGetter(SpellQuality::sigilPrecision),
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("signPrecision")
+                            .forGetter(SpellQuality::signPrecision),
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("layoutPrecision")
+                            .forGetter(SpellQuality::layoutPrecision),
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("inkCleanliness")
+                            .forGetter(SpellQuality::inkCleanliness),
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("stability")
+                            .forGetter(SpellQuality::stability),
+                    QUALITY_TIER_CODEC.fieldOf("tier").forGetter(SpellQuality::tier)
+            ).apply(instance, SpellQuality::new)).validate(quality ->
+                    validSpellQuality(quality)
+                            ? DataResult.success(quality)
+                            : DataResult.error(() -> "Malformed spell quality"));
+
+    private static final Codec<SpellParameters> SPELL_PARAMETERS_CODEC =
+            RecordCodecBuilder.<SpellParameters>create(instance -> instance.group(
+                    NON_NEGATIVE_FINITE_DOUBLE_CODEC.fieldOf("sizeScale")
+                            .forGetter(SpellParameters::sizeScale),
+                    SEAL_SIZE_TIER_CODEC.fieldOf("sizeTier").forGetter(SpellParameters::sizeTier),
+                    NON_NEGATIVE_FINITE_DOUBLE_CODEC.fieldOf("qualityEfficiency")
+                            .forGetter(SpellParameters::qualityEfficiency),
+                    NON_NEGATIVE_FINITE_DOUBLE_CODEC.fieldOf("powerMultiplier")
+                            .forGetter(SpellParameters::powerMultiplier),
+                    NON_NEGATIVE_FINITE_DOUBLE_CODEC.fieldOf("rangeMultiplier")
+                            .forGetter(SpellParameters::rangeMultiplier),
+                    NON_NEGATIVE_FINITE_DOUBLE_CODEC.fieldOf("radiusMultiplier")
+                            .forGetter(SpellParameters::radiusMultiplier),
+                    NON_NEGATIVE_FINITE_DOUBLE_CODEC.fieldOf("durationMultiplier")
+                            .forGetter(SpellParameters::durationMultiplier),
+                    NON_NEGATIVE_FINITE_DOUBLE_CODEC.fieldOf("speedMultiplier")
+                            .forGetter(SpellParameters::speedMultiplier),
+                    NON_NEGATIVE_FINITE_DOUBLE_CODEC.fieldOf("forceMultiplier")
+                            .forGetter(SpellParameters::forceMultiplier),
+                    NON_NEGATIVE_FINITE_DOUBLE_CODEC.fieldOf("stability")
+                            .forGetter(SpellParameters::stability)
+            ).apply(instance, SpellParameters::new)).validate(parameters ->
+                    validSpellParameters(parameters)
+                            ? DataResult.success(parameters)
+                            : DataResult.error(() -> "Malformed spell parameters"));
+
+    private record PersistedCompiledSigil(
+            Identifier semanticId,
+            String matchedTemplateId,
+            String displayName,
+            ElementType element,
+            SigilSemantic semantic,
+            double recognitionConfidence,
+            Optional<RecognitionQualityMetrics> qualityMetrics,
+            Point centroid,
+            BoundingBox bounds,
+            double orientationDegrees,
+            List<Integer> sourceStrokeIndices
+    ) {
+        private CompiledSigil toCompiled() {
+            return new CompiledSigil(
+                    semanticId,
+                    matchedTemplateId,
+                    displayName,
+                    element,
+                    semantic,
+                    recognitionConfidence,
+                    qualityMetrics.orElse(RecognitionQualityMetrics.NEUTRAL),
+                    centroid,
+                    bounds,
+                    orientationDegrees,
+                    sourceStrokeIndices);
+        }
+
+        private static PersistedCompiledSigil fromCompiled(
+                CompiledSigil sigil,
+                boolean includeQualityMetrics) {
+            return new PersistedCompiledSigil(
+                    sigil.semanticId(),
+                    sigil.matchedTemplateId(),
+                    sigil.displayName(),
+                    sigil.element(),
+                    sigil.semantic(),
+                    sigil.recognitionConfidence(),
+                    includeQualityMetrics
+                            ? Optional.of(sigil.qualityMetrics())
+                            : Optional.empty(),
+                    sigil.centroid(),
+                    sigil.bounds(),
+                    sigil.orientationDegrees(),
+                    sigil.sourceStrokeIndices());
+        }
+    }
+
+    private record PersistedCompiledSign(
+            Identifier semanticId,
+            String matchedTemplateId,
+            SignSemantic semantic,
+            double confidence,
+            Optional<RecognitionQualityMetrics> qualityMetrics,
+            double angleAroundRing,
+            double orientationDegrees,
+            double radialPosition,
+            SpellLayer layer,
+            Point centroid,
+            BoundingBox bounds,
+            List<Integer> sourceStrokeIndices,
+            boolean reversed
+    ) {
+        private CompiledSign toCompiled() {
+            return new CompiledSign(
+                    semanticId,
+                    matchedTemplateId,
+                    semantic,
+                    confidence,
+                    qualityMetrics.orElse(RecognitionQualityMetrics.NEUTRAL),
+                    angleAroundRing,
+                    orientationDegrees,
+                    radialPosition,
+                    layer,
+                    centroid,
+                    bounds,
+                    sourceStrokeIndices,
+                    reversed);
+        }
+
+        private static PersistedCompiledSign fromCompiled(
+                CompiledSign sign,
+                boolean includeQualityMetrics) {
+            return new PersistedCompiledSign(
+                    sign.semanticId(),
+                    sign.matchedTemplateId(),
+                    sign.semantic(),
+                    sign.confidence(),
+                    includeQualityMetrics
+                            ? Optional.of(sign.qualityMetrics())
+                            : Optional.empty(),
+                    sign.angleAroundRing(),
+                    sign.orientationDegrees(),
+                    sign.radialPosition(),
+                    sign.layer(),
+                    sign.centroid(),
+                    sign.bounds(),
+                    sign.sourceStrokeIndices(),
+                    sign.reversed());
+        }
+    }
+
+    private static final Codec<PersistedCompiledSigil> PERSISTED_COMPILED_SIGIL_CODEC =
+            RecordCodecBuilder.create(instance ->
             instance.group(
-                    IDENTIFIER_CODEC.fieldOf("semanticId").forGetter(CompiledSign::semanticId),
-                    Codec.STRING.fieldOf("matchedTemplateId").forGetter(CompiledSign::matchedTemplateId),
-                    SIGN_SEMANTIC_CODEC.fieldOf("semantic").forGetter(CompiledSign::semantic),
-                    Codec.DOUBLE.fieldOf("confidence").forGetter(CompiledSign::confidence),
-                    Codec.DOUBLE.fieldOf("angleAroundRing").forGetter(CompiledSign::angleAroundRing),
-                    Codec.DOUBLE.fieldOf("orientationDegrees").forGetter(CompiledSign::orientationDegrees),
-                    Codec.DOUBLE.fieldOf("radialPosition").forGetter(CompiledSign::radialPosition),
-                    SPELL_LAYER_CODEC.fieldOf("layer").forGetter(CompiledSign::layer),
-                    Point.CODEC.fieldOf("centroid").forGetter(CompiledSign::centroid),
-                    BOUNDING_BOX_CODEC.fieldOf("bounds").forGetter(CompiledSign::bounds),
-                    Codec.list(Codec.INT).fieldOf("sourceStrokeIndices").forGetter(CompiledSign::sourceStrokeIndices),
-                    Codec.BOOL.fieldOf("reversed").forGetter(CompiledSign::reversed)
-            ).apply(instance, CompiledSign::new));
+                    IDENTIFIER_CODEC.fieldOf("semanticId").forGetter(PersistedCompiledSigil::semanticId),
+                    Codec.STRING.fieldOf("matchedTemplateId")
+                            .forGetter(PersistedCompiledSigil::matchedTemplateId),
+                    Codec.STRING.fieldOf("displayName")
+                            .forGetter(PersistedCompiledSigil::displayName),
+                    ELEMENT_TYPE_CODEC.fieldOf("element").forGetter(PersistedCompiledSigil::element),
+                    SIGIL_SEMANTIC_CODEC.fieldOf("semantic")
+                            .forGetter(PersistedCompiledSigil::semantic),
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("recognitionConfidence")
+                            .forGetter(PersistedCompiledSigil::recognitionConfidence),
+                    RECOGNITION_QUALITY_METRICS_CODEC.optionalFieldOf("qualityMetrics")
+                            .forGetter(PersistedCompiledSigil::qualityMetrics),
+                    Point.CODEC.fieldOf("centroid").forGetter(PersistedCompiledSigil::centroid),
+                    BOUNDING_BOX_CODEC.fieldOf("bounds").forGetter(PersistedCompiledSigil::bounds),
+                    Codec.DOUBLE.fieldOf("orientationDegrees")
+                            .forGetter(PersistedCompiledSigil::orientationDegrees),
+                    Codec.list(Codec.INT, 0, MAX_SOURCE_STROKES).fieldOf("sourceStrokeIndices")
+                            .forGetter(PersistedCompiledSigil::sourceStrokeIndices)
+            ).apply(instance, PersistedCompiledSigil::new));
+
+    private static final Codec<PersistedCompiledSign> PERSISTED_COMPILED_SIGN_CODEC =
+            RecordCodecBuilder.create(instance ->
+            instance.group(
+                    IDENTIFIER_CODEC.fieldOf("semanticId").forGetter(PersistedCompiledSign::semanticId),
+                    Codec.STRING.fieldOf("matchedTemplateId")
+                            .forGetter(PersistedCompiledSign::matchedTemplateId),
+                    SIGN_SEMANTIC_CODEC.fieldOf("semantic")
+                            .forGetter(PersistedCompiledSign::semantic),
+                    UNIT_INTERVAL_DOUBLE_CODEC.fieldOf("confidence")
+                            .forGetter(PersistedCompiledSign::confidence),
+                    RECOGNITION_QUALITY_METRICS_CODEC.optionalFieldOf("qualityMetrics")
+                            .forGetter(PersistedCompiledSign::qualityMetrics),
+                    Codec.DOUBLE.fieldOf("angleAroundRing")
+                            .forGetter(PersistedCompiledSign::angleAroundRing),
+                    Codec.DOUBLE.fieldOf("orientationDegrees")
+                            .forGetter(PersistedCompiledSign::orientationDegrees),
+                    Codec.DOUBLE.fieldOf("radialPosition")
+                            .forGetter(PersistedCompiledSign::radialPosition),
+                    SPELL_LAYER_CODEC.fieldOf("layer").forGetter(PersistedCompiledSign::layer),
+                    Point.CODEC.fieldOf("centroid").forGetter(PersistedCompiledSign::centroid),
+                    BOUNDING_BOX_CODEC.fieldOf("bounds").forGetter(PersistedCompiledSign::bounds),
+                    Codec.list(Codec.INT, 0, MAX_SOURCE_STROKES).fieldOf("sourceStrokeIndices")
+                            .forGetter(PersistedCompiledSign::sourceStrokeIndices),
+                    Codec.BOOL.fieldOf("reversed").forGetter(PersistedCompiledSign::reversed)
+            ).apply(instance, PersistedCompiledSign::new));
 
     private static final Codec<SpellGeometry> SPELL_GEOMETRY_CODEC = RecordCodecBuilder.create(instance ->
             instance.group(
@@ -160,37 +365,40 @@ public record StoredSpell(
             ).apply(instance, SpellGeometry::new));
 
     /**
-     * The legacy aggregate fields exist only to keep historical components decodable.
-     * They are intentionally discarded instead of being promoted into incomplete v3 geometry.
+     * Optional v4 fields retain presence information so current malformed data is
+     * distinguishable from safely stale v3 and earlier components.
      */
     private record PersistedSpell(
             int formatVersion,
             SpellState state,
-            List<CompiledSigil> compiledSigils,
-            List<CompiledSign> compiledSigns,
+            List<PersistedCompiledSigil> compiledSigils,
+            List<PersistedCompiledSign> compiledSigns,
             Optional<SpellGeometry> geometry,
+            Optional<SpellQuality> quality,
+            Optional<SpellParameters> parameters,
             String displayName,
             int strokeHash,
             String dictionaryVersion,
             String dictionaryHash,
             String recognizerVersion,
-            String authoritySignature,
-            List<ElementType> legacyElements,
-            String legacyElement,
-            Map<String, Integer> legacySignCounts,
-            Optional<SigilSemantic> legacySigilSemantic,
-            List<SignSemantic> legacySignSemantics
+            String scalingSettingsFingerprint,
+            String authoritySignature
     ) {}
 
     private static final Codec<PersistedSpell> PERSISTED_CODEC = RecordCodecBuilder.create(instance ->
             instance.group(
                     Codec.INT.optionalFieldOf("formatVersion", 0).forGetter(PersistedSpell::formatVersion),
                     SPELL_STATE_CODEC.fieldOf("state").forGetter(PersistedSpell::state),
-                    Codec.list(COMPILED_SIGIL_CODEC).optionalFieldOf("compiledSigils", List.of())
+                    Codec.list(PERSISTED_COMPILED_SIGIL_CODEC, 0, MAX_COMPILED_SYMBOLS)
+                            .optionalFieldOf("compiledSigils", List.of())
                             .forGetter(PersistedSpell::compiledSigils),
-                    Codec.list(COMPILED_SIGN_CODEC).optionalFieldOf("compiledSigns", List.of())
+                    Codec.list(PERSISTED_COMPILED_SIGN_CODEC, 0, MAX_COMPILED_SYMBOLS)
+                            .optionalFieldOf("compiledSigns", List.of())
                             .forGetter(PersistedSpell::compiledSigns),
                     SPELL_GEOMETRY_CODEC.optionalFieldOf("geometry").forGetter(PersistedSpell::geometry),
+                    SPELL_QUALITY_CODEC.optionalFieldOf("quality").forGetter(PersistedSpell::quality),
+                    SPELL_PARAMETERS_CODEC.optionalFieldOf("parameters")
+                            .forGetter(PersistedSpell::parameters),
                     Codec.STRING.optionalFieldOf("displayName", "").forGetter(PersistedSpell::displayName),
                     Codec.INT.fieldOf("strokeHash").forGetter(PersistedSpell::strokeHash),
                     Codec.STRING.optionalFieldOf("dictionaryVersion", "")
@@ -198,17 +406,10 @@ public record StoredSpell(
                     Codec.STRING.optionalFieldOf("dictionaryHash", "").forGetter(PersistedSpell::dictionaryHash),
                     Codec.STRING.optionalFieldOf("recognizerVersion", "")
                             .forGetter(PersistedSpell::recognizerVersion),
+                    Codec.STRING.optionalFieldOf("scalingSettingsFingerprint", "")
+                            .forGetter(PersistedSpell::scalingSettingsFingerprint),
                     Codec.STRING.optionalFieldOf("authoritySignature", "")
-                            .forGetter(PersistedSpell::authoritySignature),
-                    Codec.list(ELEMENT_TYPE_CODEC).optionalFieldOf("elements", List.of())
-                            .forGetter(PersistedSpell::legacyElements),
-                    Codec.STRING.optionalFieldOf("element", "").forGetter(PersistedSpell::legacyElement),
-                    Codec.unboundedMap(Codec.STRING, Codec.INT).optionalFieldOf("signCounts", Map.of())
-                            .forGetter(PersistedSpell::legacySignCounts),
-                    SIGIL_SEMANTIC_CODEC.optionalFieldOf("sigilSemantic")
-                            .forGetter(PersistedSpell::legacySigilSemantic),
-                    Codec.list(SIGN_SEMANTIC_CODEC).optionalFieldOf("signSemantics", List.of())
-                            .forGetter(PersistedSpell::legacySignSemantics)
+                            .forGetter(PersistedSpell::authoritySignature)
             ).apply(instance, PersistedSpell::new));
 
     public static final Codec<StoredSpell> CODEC = PERSISTED_CODEC.flatXmap(
@@ -299,7 +500,31 @@ public record StoredSpell(
                 }
             };
 
-    private static final StreamCodec<RegistryFriendlyByteBuf, CompiledSigil> COMPILED_SIGIL_STREAM_CODEC =
+    private static final StreamCodec<RegistryFriendlyByteBuf, RecognitionQualityMetrics>
+            RECOGNITION_QUALITY_METRICS_STREAM_CODEC = new StreamCodec<>() {
+                @Override
+                public RecognitionQualityMetrics decode(RegistryFriendlyByteBuf buffer) {
+                    return new RecognitionQualityMetrics(
+                            decodeUnitDouble(buffer, "template coverage"),
+                            decodeUnitDouble(buffer, "candidate explained ratio"),
+                            decodeUnitDouble(buffer, "unexplained ink ratio"),
+                            decodeUnitDouble(buffer, "structural score"));
+                }
+
+                @Override
+                public void encode(
+                        RegistryFriendlyByteBuf buffer,
+                        RecognitionQualityMetrics metrics) {
+                    ByteBufCodecs.DOUBLE.encode(buffer, metrics.templateCoverage());
+                    ByteBufCodecs.DOUBLE.encode(buffer, metrics.candidateExplainedRatio());
+                    ByteBufCodecs.DOUBLE.encode(buffer, metrics.unexplainedInkRatio());
+                    ByteBufCodecs.DOUBLE.encode(buffer, metrics.structuralScore());
+                }
+            };
+
+    /** Exact pre-v4 glyph layout used only to move stale cached components safely. */
+    private static final StreamCodec<RegistryFriendlyByteBuf, CompiledSigil>
+            LEGACY_COMPILED_SIGIL_STREAM_CODEC =
             new StreamCodec<>() {
                 @Override
                 public CompiledSigil decode(RegistryFriendlyByteBuf buffer) {
@@ -313,7 +538,10 @@ public record StoredSpell(
                             EXACT_POINT_STREAM_CODEC.decode(buffer),
                             BOUNDING_BOX_STREAM_CODEC.decode(buffer),
                             ByteBufCodecs.DOUBLE.decode(buffer),
-                            ByteBufCodecs.collection(ArrayList::new, ByteBufCodecs.VAR_INT).decode(buffer));
+                            ByteBufCodecs.collection(
+                                    ArrayList::new,
+                                    ByteBufCodecs.VAR_INT,
+                                    MAX_SOURCE_STROKES).decode(buffer));
                 }
 
                 @Override
@@ -327,12 +555,17 @@ public record StoredSpell(
                     EXACT_POINT_STREAM_CODEC.encode(buffer, sigil.centroid());
                     BOUNDING_BOX_STREAM_CODEC.encode(buffer, sigil.bounds());
                     ByteBufCodecs.DOUBLE.encode(buffer, sigil.orientationDegrees());
-                    ByteBufCodecs.collection(ArrayList::new, ByteBufCodecs.VAR_INT)
+                    ByteBufCodecs.collection(
+                                    ArrayList::new,
+                                    ByteBufCodecs.VAR_INT,
+                                    MAX_SOURCE_STROKES)
                             .encode(buffer, new ArrayList<>(sigil.sourceStrokeIndices()));
                 }
             };
 
-    private static final StreamCodec<RegistryFriendlyByteBuf, CompiledSign> COMPILED_SIGN_STREAM_CODEC =
+    /** Exact pre-v4 glyph layout used only to move stale cached components safely. */
+    private static final StreamCodec<RegistryFriendlyByteBuf, CompiledSign>
+            LEGACY_COMPILED_SIGN_STREAM_CODEC =
             new StreamCodec<>() {
                 @Override
                 public CompiledSign decode(RegistryFriendlyByteBuf buffer) {
@@ -347,7 +580,10 @@ public record StoredSpell(
                             decodeEnum(buffer, SpellLayer.class),
                             EXACT_POINT_STREAM_CODEC.decode(buffer),
                             BOUNDING_BOX_STREAM_CODEC.decode(buffer),
-                            ByteBufCodecs.collection(ArrayList::new, ByteBufCodecs.VAR_INT).decode(buffer),
+                            ByteBufCodecs.collection(
+                                    ArrayList::new,
+                                    ByteBufCodecs.VAR_INT,
+                                    MAX_SOURCE_STROKES).decode(buffer),
                             ByteBufCodecs.BOOL.decode(buffer));
                 }
 
@@ -363,7 +599,96 @@ public record StoredSpell(
                     encodeEnum(buffer, sign.layer());
                     EXACT_POINT_STREAM_CODEC.encode(buffer, sign.centroid());
                     BOUNDING_BOX_STREAM_CODEC.encode(buffer, sign.bounds());
-                    ByteBufCodecs.collection(ArrayList::new, ByteBufCodecs.VAR_INT)
+                    ByteBufCodecs.collection(
+                                    ArrayList::new,
+                                    ByteBufCodecs.VAR_INT,
+                                    MAX_SOURCE_STROKES)
+                            .encode(buffer, new ArrayList<>(sign.sourceStrokeIndices()));
+                    ByteBufCodecs.BOOL.encode(buffer, sign.reversed());
+                }
+            };
+
+    private static final StreamCodec<RegistryFriendlyByteBuf, CompiledSigil>
+            COMPILED_SIGIL_STREAM_CODEC = new StreamCodec<>() {
+                @Override
+                public CompiledSigil decode(RegistryFriendlyByteBuf buffer) {
+                    return new CompiledSigil(
+                            Identifier.STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.STRING_UTF8.decode(buffer),
+                            ByteBufCodecs.STRING_UTF8.decode(buffer),
+                            decodeEnum(buffer, ElementType.class),
+                            SIGIL_SEMANTIC_STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            RECOGNITION_QUALITY_METRICS_STREAM_CODEC.decode(buffer),
+                            EXACT_POINT_STREAM_CODEC.decode(buffer),
+                            BOUNDING_BOX_STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.collection(
+                                    ArrayList::new,
+                                    ByteBufCodecs.VAR_INT,
+                                    MAX_SOURCE_STROKES).decode(buffer));
+                }
+
+                @Override
+                public void encode(RegistryFriendlyByteBuf buffer, CompiledSigil sigil) {
+                    Identifier.STREAM_CODEC.encode(buffer, sigil.semanticId());
+                    ByteBufCodecs.STRING_UTF8.encode(buffer, sigil.matchedTemplateId());
+                    ByteBufCodecs.STRING_UTF8.encode(buffer, sigil.displayName());
+                    encodeEnum(buffer, sigil.element());
+                    SIGIL_SEMANTIC_STREAM_CODEC.encode(buffer, sigil.semantic());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sigil.recognitionConfidence());
+                    RECOGNITION_QUALITY_METRICS_STREAM_CODEC.encode(buffer, sigil.qualityMetrics());
+                    EXACT_POINT_STREAM_CODEC.encode(buffer, sigil.centroid());
+                    BOUNDING_BOX_STREAM_CODEC.encode(buffer, sigil.bounds());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sigil.orientationDegrees());
+                    ByteBufCodecs.collection(
+                                    ArrayList::new,
+                                    ByteBufCodecs.VAR_INT,
+                                    MAX_SOURCE_STROKES)
+                            .encode(buffer, new ArrayList<>(sigil.sourceStrokeIndices()));
+                }
+            };
+
+    private static final StreamCodec<RegistryFriendlyByteBuf, CompiledSign>
+            COMPILED_SIGN_STREAM_CODEC = new StreamCodec<>() {
+                @Override
+                public CompiledSign decode(RegistryFriendlyByteBuf buffer) {
+                    return new CompiledSign(
+                            Identifier.STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.STRING_UTF8.decode(buffer),
+                            SIGN_SEMANTIC_STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            RECOGNITION_QUALITY_METRICS_STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            decodeEnum(buffer, SpellLayer.class),
+                            EXACT_POINT_STREAM_CODEC.decode(buffer),
+                            BOUNDING_BOX_STREAM_CODEC.decode(buffer),
+                            ByteBufCodecs.collection(
+                                    ArrayList::new,
+                                    ByteBufCodecs.VAR_INT,
+                                    MAX_SOURCE_STROKES).decode(buffer),
+                            ByteBufCodecs.BOOL.decode(buffer));
+                }
+
+                @Override
+                public void encode(RegistryFriendlyByteBuf buffer, CompiledSign sign) {
+                    Identifier.STREAM_CODEC.encode(buffer, sign.semanticId());
+                    ByteBufCodecs.STRING_UTF8.encode(buffer, sign.matchedTemplateId());
+                    SIGN_SEMANTIC_STREAM_CODEC.encode(buffer, sign.semantic());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sign.confidence());
+                    RECOGNITION_QUALITY_METRICS_STREAM_CODEC.encode(buffer, sign.qualityMetrics());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sign.angleAroundRing());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sign.orientationDegrees());
+                    ByteBufCodecs.DOUBLE.encode(buffer, sign.radialPosition());
+                    encodeEnum(buffer, sign.layer());
+                    EXACT_POINT_STREAM_CODEC.encode(buffer, sign.centroid());
+                    BOUNDING_BOX_STREAM_CODEC.encode(buffer, sign.bounds());
+                    ByteBufCodecs.collection(
+                                    ArrayList::new,
+                                    ByteBufCodecs.VAR_INT,
+                                    MAX_SOURCE_STROKES)
                             .encode(buffer, new ArrayList<>(sign.sourceStrokeIndices()));
                     ByteBufCodecs.BOOL.encode(buffer, sign.reversed());
                 }
@@ -403,55 +728,166 @@ public record StoredSpell(
                 }
             };
 
+    private static final StreamCodec<RegistryFriendlyByteBuf, SpellQuality>
+            SPELL_QUALITY_STREAM_CODEC = new StreamCodec<>() {
+                @Override
+                public SpellQuality decode(RegistryFriendlyByteBuf buffer) {
+                    return new SpellQuality(
+                            decodeUnitDouble(buffer, "overall quality"),
+                            decodeUnitDouble(buffer, "ring precision"),
+                            decodeUnitDouble(buffer, "sigil precision"),
+                            decodeUnitDouble(buffer, "sign precision"),
+                            decodeUnitDouble(buffer, "layout precision"),
+                            decodeUnitDouble(buffer, "ink cleanliness"),
+                            decodeUnitDouble(buffer, "quality stability"),
+                            decodeEnum(buffer, QualityTier.class));
+                }
+
+                @Override
+                public void encode(RegistryFriendlyByteBuf buffer, SpellQuality quality) {
+                    ByteBufCodecs.DOUBLE.encode(buffer, quality.overall());
+                    ByteBufCodecs.DOUBLE.encode(buffer, quality.ringPrecision());
+                    ByteBufCodecs.DOUBLE.encode(buffer, quality.sigilPrecision());
+                    ByteBufCodecs.DOUBLE.encode(buffer, quality.signPrecision());
+                    ByteBufCodecs.DOUBLE.encode(buffer, quality.layoutPrecision());
+                    ByteBufCodecs.DOUBLE.encode(buffer, quality.inkCleanliness());
+                    ByteBufCodecs.DOUBLE.encode(buffer, quality.stability());
+                    encodeEnum(buffer, quality.tier());
+                }
+            };
+
+    private static final StreamCodec<RegistryFriendlyByteBuf, SpellParameters>
+            SPELL_PARAMETERS_STREAM_CODEC = new StreamCodec<>() {
+                @Override
+                public SpellParameters decode(RegistryFriendlyByteBuf buffer) {
+                    return new SpellParameters(
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            decodeEnum(buffer, SealSizeTier.class),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer),
+                            ByteBufCodecs.DOUBLE.decode(buffer));
+                }
+
+                @Override
+                public void encode(RegistryFriendlyByteBuf buffer, SpellParameters parameters) {
+                    ByteBufCodecs.DOUBLE.encode(buffer, parameters.sizeScale());
+                    encodeEnum(buffer, parameters.sizeTier());
+                    ByteBufCodecs.DOUBLE.encode(buffer, parameters.qualityEfficiency());
+                    ByteBufCodecs.DOUBLE.encode(buffer, parameters.powerMultiplier());
+                    ByteBufCodecs.DOUBLE.encode(buffer, parameters.rangeMultiplier());
+                    ByteBufCodecs.DOUBLE.encode(buffer, parameters.radiusMultiplier());
+                    ByteBufCodecs.DOUBLE.encode(buffer, parameters.durationMultiplier());
+                    ByteBufCodecs.DOUBLE.encode(buffer, parameters.speedMultiplier());
+                    ByteBufCodecs.DOUBLE.encode(buffer, parameters.forceMultiplier());
+                    ByteBufCodecs.DOUBLE.encode(buffer, parameters.stability());
+                }
+            };
+
     public static final StreamCodec<RegistryFriendlyByteBuf, StoredSpell> STREAM_CODEC =
             new StreamCodec<>() {
                 @Override
                 public StoredSpell decode(RegistryFriendlyByteBuf buffer) {
                     int formatVersion = ByteBufCodecs.VAR_INT.decode(buffer);
+                    boolean v4Layout = formatVersion >= FORMAT_VERSION;
                     SpellState state = decodeEnum(buffer, SpellState.class);
                     List<CompiledSigil> compiledSigils = ByteBufCodecs.collection(
-                            ArrayList::new, COMPILED_SIGIL_STREAM_CODEC).decode(buffer);
+                            ArrayList::new,
+                            v4Layout
+                                    ? COMPILED_SIGIL_STREAM_CODEC
+                                    : LEGACY_COMPILED_SIGIL_STREAM_CODEC,
+                            MAX_COMPILED_SYMBOLS).decode(buffer);
                     List<CompiledSign> compiledSigns = ByteBufCodecs.collection(
-                            ArrayList::new, COMPILED_SIGN_STREAM_CODEC).decode(buffer);
+                            ArrayList::new,
+                            v4Layout
+                                    ? COMPILED_SIGN_STREAM_CODEC
+                                    : LEGACY_COMPILED_SIGN_STREAM_CODEC,
+                            MAX_COMPILED_SYMBOLS).decode(buffer);
                     SpellGeometry geometry = ByteBufCodecs.BOOL.decode(buffer)
                             ? SPELL_GEOMETRY_STREAM_CODEC.decode(buffer)
                             : null;
+                    SpellQuality quality = v4Layout
+                            ? SPELL_QUALITY_STREAM_CODEC.decode(buffer)
+                            : SpellQuality.UNASSESSED;
+                    SpellParameters parameters = v4Layout
+                            ? SPELL_PARAMETERS_STREAM_CODEC.decode(buffer)
+                            : SpellParameters.NEUTRAL;
+                    String displayName = ByteBufCodecs.STRING_UTF8.decode(buffer);
+                    int strokeHash = ByteBufCodecs.VAR_INT.decode(buffer);
+                    String dictionaryVersion = ByteBufCodecs.STRING_UTF8.decode(buffer);
+                    String dictionaryHash = ByteBufCodecs.STRING_UTF8.decode(buffer);
+                    String recognizerVersion = ByteBufCodecs.STRING_UTF8.decode(buffer);
+                    String scalingSettingsFingerprint = v4Layout
+                            ? ByteBufCodecs.STRING_UTF8.decode(buffer)
+                            : "";
+                    String authoritySignature = ByteBufCodecs.STRING_UTF8.decode(buffer);
                     StoredSpell spell = new StoredSpell(
                             formatVersion,
                             state,
                             compiledSigils,
                             compiledSigns,
                             geometry,
-                            ByteBufCodecs.STRING_UTF8.decode(buffer),
-                            ByteBufCodecs.VAR_INT.decode(buffer),
-                            ByteBufCodecs.STRING_UTF8.decode(buffer),
-                            ByteBufCodecs.STRING_UTF8.decode(buffer),
-                            ByteBufCodecs.STRING_UTF8.decode(buffer),
-                            ByteBufCodecs.STRING_UTF8.decode(buffer));
+                            quality,
+                            parameters,
+                            displayName,
+                            strokeHash,
+                            dictionaryVersion,
+                            dictionaryHash,
+                            recognizerVersion,
+                            scalingSettingsFingerprint,
+                            authoritySignature);
                     if (spell.formatVersion() == FORMAT_VERSION
                             && !spell.hasStructurallyValidCurrentPayload(-1)) {
-                        throw new IllegalArgumentException("Malformed v3 stored-spell network payload");
+                        throw new IllegalArgumentException("Malformed v4 stored-spell network payload");
                     }
                     return spell;
                 }
 
                 @Override
                 public void encode(RegistryFriendlyByteBuf buffer, StoredSpell spell) {
+                    if (spell.formatVersion() == FORMAT_VERSION
+                            && !spell.hasStructurallyValidCurrentPayload(-1)) {
+                        throw new IllegalArgumentException(
+                                "Cannot encode malformed v4 stored-spell network payload");
+                    }
+                    boolean v4Layout = spell.formatVersion() >= FORMAT_VERSION;
                     ByteBufCodecs.VAR_INT.encode(buffer, spell.formatVersion());
                     encodeEnum(buffer, spell.state());
-                    ByteBufCodecs.collection(ArrayList::new, COMPILED_SIGIL_STREAM_CODEC)
+                    ByteBufCodecs.collection(
+                                    ArrayList::new,
+                                    v4Layout
+                                            ? COMPILED_SIGIL_STREAM_CODEC
+                                            : LEGACY_COMPILED_SIGIL_STREAM_CODEC,
+                                    MAX_COMPILED_SYMBOLS)
                             .encode(buffer, new ArrayList<>(spell.compiledSigils()));
-                    ByteBufCodecs.collection(ArrayList::new, COMPILED_SIGN_STREAM_CODEC)
+                    ByteBufCodecs.collection(
+                                    ArrayList::new,
+                                    v4Layout
+                                            ? COMPILED_SIGN_STREAM_CODEC
+                                            : LEGACY_COMPILED_SIGN_STREAM_CODEC,
+                                    MAX_COMPILED_SYMBOLS)
                             .encode(buffer, new ArrayList<>(spell.compiledSigns()));
                     ByteBufCodecs.BOOL.encode(buffer, spell.geometry() != null);
                     if (spell.geometry() != null) {
                         SPELL_GEOMETRY_STREAM_CODEC.encode(buffer, spell.geometry());
+                    }
+                    if (v4Layout) {
+                        SPELL_QUALITY_STREAM_CODEC.encode(buffer, spell.quality());
+                        SPELL_PARAMETERS_STREAM_CODEC.encode(buffer, spell.parameters());
                     }
                     ByteBufCodecs.STRING_UTF8.encode(buffer, spell.displayName());
                     ByteBufCodecs.VAR_INT.encode(buffer, spell.strokeHash());
                     ByteBufCodecs.STRING_UTF8.encode(buffer, spell.dictionaryVersion());
                     ByteBufCodecs.STRING_UTF8.encode(buffer, spell.dictionaryHash());
                     ByteBufCodecs.STRING_UTF8.encode(buffer, spell.recognizerVersion());
+                    if (v4Layout) {
+                        ByteBufCodecs.STRING_UTF8.encode(
+                                buffer, spell.scalingSettingsFingerprint());
+                    }
                     ByteBufCodecs.STRING_UTF8.encode(buffer, spell.authoritySignature());
                 }
             };
@@ -460,40 +896,51 @@ public record StoredSpell(
         state = state == null ? SpellState.INVALID : state;
         compiledSigils = compiledSigils == null ? List.of() : List.copyOf(compiledSigils);
         compiledSigns = compiledSigns == null ? List.of() : List.copyOf(compiledSigns);
+        quality = quality == null ? SpellQuality.UNASSESSED : quality;
+        parameters = parameters == null ? SpellParameters.NEUTRAL : parameters;
         displayName = safeString(displayName);
         dictionaryVersion = safeString(dictionaryVersion);
         dictionaryHash = safeString(dictionaryHash);
         recognizerVersion = safeString(recognizerVersion);
+        scalingSettingsFingerprint = safeString(scalingSettingsFingerprint);
         authoritySignature = safeString(authoritySignature);
     }
 
     /** Build a current authoritative component from a successful server parse. */
     public static StoredSpell fromIr(SpellIr ir, List<List<Point>> strokes) {
         SpellDictionary.DictionarySnapshot dictionary = SpellDictionary.snapshot();
+        MagicScalingSettings scalingSettings = MagicScalingSettings.fromConfig();
         int strokeHash = computeStrokeHash(strokes);
         String recognizerVersion = PointCloudRecognizer.RECOGNIZER_VERSION;
+        String scalingSettingsFingerprint = scalingSettings.fingerprint();
         String authoritySignature = signCompiledPayload(
                 FORMAT_VERSION,
                 ir.state(),
                 ir.compiledSigils(),
                 ir.compiledSigns(),
                 ir.geometry(),
+                ir.quality(),
+                ir.parameters(),
                 ir.displayName(),
                 strokeHash,
                 dictionary.version(),
                 dictionary.hash(),
-                recognizerVersion);
+                recognizerVersion,
+                scalingSettingsFingerprint);
         return new StoredSpell(
                 FORMAT_VERSION,
                 ir.state(),
                 ir.compiledSigils(),
                 ir.compiledSigns(),
                 ir.geometry(),
+                ir.quality(),
+                ir.parameters(),
                 ir.displayName(),
                 strokeHash,
                 dictionary.version(),
                 dictionary.hash(),
                 recognizerVersion,
+                scalingSettingsFingerprint,
                 authoritySignature);
     }
 
@@ -504,23 +951,28 @@ public record StoredSpell(
         }
         List<List<Point>> sourceStrokes = strokes == null ? List.of() : strokes;
         SpellDictionary.DictionarySnapshot dictionary = SpellDictionary.snapshot();
+        String currentScalingFingerprint = MagicScalingSettings.fromConfig().fingerprint();
         return hasStructurallyValidCurrentPayload(sourceStrokes.size())
                 && hasKnownTemplates(dictionary)
                 && strokeHash == computeStrokeHash(sourceStrokes)
                 && dictionary.version().equals(dictionaryVersion)
                 && dictionary.hash().equals(dictionaryHash)
                 && PointCloudRecognizer.RECOGNIZER_VERSION.equals(recognizerVersion)
+                && currentScalingFingerprint.equals(scalingSettingsFingerprint)
                 && authoritySignature.equals(signCompiledPayload(
                         formatVersion,
                         state,
                         compiledSigils,
                         compiledSigns,
                         geometry,
+                        quality,
+                        parameters,
                         displayName,
                         strokeHash,
                         dictionaryVersion,
                         dictionaryHash,
-                        recognizerVersion));
+                        recognizerVersion,
+                        scalingSettingsFingerprint));
     }
 
     private boolean hasStructurallyValidCurrentPayload(int sourceStrokeCount) {
@@ -533,8 +985,13 @@ public record StoredSpell(
                 || dictionaryVersion.isBlank()
                 || dictionaryHash.isBlank()
                 || recognizerVersion.isBlank()
+                || scalingSettingsFingerprint.isBlank()
+                || scalingSettingsFingerprint.length() > MAX_SCALING_FINGERPRINT_LENGTH
                 || !validAuthoritySignature(authoritySignature)
-                || !validGeometry(geometry)) {
+                || !validGeometry(geometry)
+                || !validSpellQuality(quality)
+                || !validSpellParameters(parameters)
+                || !nearlyEqual(parameters.stability(), quality.stability())) {
             return false;
         }
 
@@ -607,6 +1064,7 @@ public record StoredSpell(
                 && sigil.element() != null
                 && validSigilSemantic(sigil.semantic())
                 && unitInterval(sigil.recognitionConfidence())
+                && validRecognitionQualityMetrics(sigil.qualityMetrics())
                 && validCoordinatePoint(sigil.centroid())
                 && validBounds(sigil.bounds())
                 && pointInsideBounds(sigil.centroid(), sigil.bounds())
@@ -623,6 +1081,7 @@ public record StoredSpell(
                 || !validIdentifierString(sign.matchedTemplateId())
                 || !validSignSemantic(sign.semantic())
                 || !unitInterval(sign.confidence())
+                || !validRecognitionQualityMetrics(sign.qualityMetrics())
                 || !validDegrees(sign.angleAroundRing())
                 || !validDegrees(sign.orientationDegrees())
                 || !finiteRange(sign.radialPosition(), 0.0, MAX_NORMALIZED_RADIAL_POSITION)
@@ -670,6 +1129,53 @@ public record StoredSpell(
 
         return nearlyEqual(geometry.ringArea(), Math.PI * geometry.ringRadius() * geometry.ringRadius())
                 && nearlyEqual(geometry.normalizedRingDiameter(), geometry.ringRadius() * 2.0);
+    }
+
+    private static boolean validRecognitionQualityMetrics(
+            RecognitionQualityMetrics metrics) {
+        return metrics != null
+                && unitInterval(metrics.templateCoverage())
+                && unitInterval(metrics.candidateExplainedRatio())
+                && unitInterval(metrics.unexplainedInkRatio())
+                && unitInterval(metrics.structuralScore());
+    }
+
+    private static boolean validSpellQuality(SpellQuality quality) {
+        return quality != null
+                && unitInterval(quality.overall())
+                && unitInterval(quality.ringPrecision())
+                && unitInterval(quality.sigilPrecision())
+                && unitInterval(quality.signPrecision())
+                && unitInterval(quality.layoutPrecision())
+                && unitInterval(quality.inkCleanliness())
+                && unitInterval(quality.stability())
+                && quality.tier() != null
+                && quality.tier() == QualityTier.fromOverall(quality.overall());
+    }
+
+    /**
+     * Schema limits are intentionally independent of the local server config.
+     * This validation also runs on clients decoding server-synchronized components.
+     */
+    private static boolean validSpellParameters(SpellParameters parameters) {
+        return parameters != null
+                && finiteRange(
+                        parameters.sizeScale(),
+                        MIN_SCHEMA_SIZE_SCALE,
+                        MAX_SCHEMA_SIZE_SCALE)
+                && parameters.sizeTier() != null
+                && parameters.sizeTier() == SealSizeTier.fromScale(parameters.sizeScale())
+                && unitInterval(parameters.qualityEfficiency())
+                && finiteRange(parameters.powerMultiplier(), 0.0, MAX_SCHEMA_MULTIPLIER)
+                && finiteRange(parameters.rangeMultiplier(), 0.0, MAX_SCHEMA_MULTIPLIER)
+                && finiteRange(parameters.radiusMultiplier(), 0.0, MAX_SCHEMA_MULTIPLIER)
+                && finiteRange(
+                        parameters.durationMultiplier(),
+                        0.0,
+                        MAX_SCHEMA_DURATION_MULTIPLIER)
+                && finiteRange(parameters.speedMultiplier(), 0.0, MAX_SCHEMA_MULTIPLIER)
+                && finiteRange(parameters.forceMultiplier(), 0.0, MAX_SCHEMA_MULTIPLIER)
+                && unitInterval(parameters.stability());
     }
 
     private static boolean validSigilSemantic(SigilSemantic semantic) {
@@ -801,6 +1307,8 @@ public record StoredSpell(
                 compiledSigils,
                 compiledSigns,
                 geometry,
+                quality,
+                parameters,
                 displayName,
                 prefix + displayName);
     }
@@ -844,14 +1352,17 @@ public record StoredSpell(
             List<CompiledSigil> compiledSigils,
             List<CompiledSign> compiledSigns,
             SpellGeometry geometry,
+            SpellQuality quality,
+            SpellParameters parameters,
             String displayName,
             int strokeHash,
             String dictionaryVersion,
             String dictionaryHash,
-            String recognizerVersion) {
+            String recognizerVersion,
+            String scalingSettingsFingerprint) {
         Mac mac = AUTHORITY_MAC.get();
         mac.reset();
-        updateString(mac, "wha-magic/stored-spell-authority");
+        updateString(mac, "wha-magic/stored-spell-authority/v4");
         updateInt(mac, formatVersion);
         updateString(mac, state == null ? "" : state.name());
 
@@ -870,11 +1381,14 @@ public record StoredSpell(
         }
 
         updateSpellGeometry(mac, geometry);
+        updateSpellQuality(mac, quality);
+        updateSpellParameters(mac, parameters);
         updateString(mac, safeString(displayName));
         updateInt(mac, strokeHash);
         updateString(mac, safeString(dictionaryVersion));
         updateString(mac, safeString(dictionaryHash));
         updateString(mac, safeString(recognizerVersion));
+        updateString(mac, safeString(scalingSettingsFingerprint));
         return HexFormat.of().formatHex(mac.doFinal());
     }
 
@@ -890,6 +1404,7 @@ public record StoredSpell(
         updateString(mac, sigil.element() == null ? "" : sigil.element().name());
         updateSigilSemantic(mac, sigil.semantic());
         updateDouble(mac, sigil.recognitionConfidence());
+        updateRecognitionQualityMetrics(mac, sigil.qualityMetrics());
         updatePoint(mac, sigil.centroid());
         updateBounds(mac, sigil.bounds());
         updateDouble(mac, sigil.orientationDegrees());
@@ -906,6 +1421,7 @@ public record StoredSpell(
         updateString(mac, safeString(sign.matchedTemplateId()));
         updateSignSemantic(mac, sign.semantic());
         updateDouble(mac, sign.confidence());
+        updateRecognitionQualityMetrics(mac, sign.qualityMetrics());
         updateDouble(mac, sign.angleAroundRing());
         updateDouble(mac, sign.orientationDegrees());
         updateDouble(mac, sign.radialPosition());
@@ -933,6 +1449,54 @@ public record StoredSpell(
         updateDouble(mac, geometry.radialSymmetryScore());
         updateDouble(mac, geometry.bilateralSymmetryScore());
         updateDouble(mac, geometry.signBalanceScore());
+    }
+
+    private static void updateRecognitionQualityMetrics(
+            Mac mac,
+            RecognitionQualityMetrics metrics) {
+        if (metrics == null) {
+            updateInt(mac, 0);
+            return;
+        }
+        updateInt(mac, 1);
+        updateDouble(mac, metrics.templateCoverage());
+        updateDouble(mac, metrics.candidateExplainedRatio());
+        updateDouble(mac, metrics.unexplainedInkRatio());
+        updateDouble(mac, metrics.structuralScore());
+    }
+
+    private static void updateSpellQuality(Mac mac, SpellQuality quality) {
+        if (quality == null) {
+            updateInt(mac, 0);
+            return;
+        }
+        updateInt(mac, 1);
+        updateDouble(mac, quality.overall());
+        updateDouble(mac, quality.ringPrecision());
+        updateDouble(mac, quality.sigilPrecision());
+        updateDouble(mac, quality.signPrecision());
+        updateDouble(mac, quality.layoutPrecision());
+        updateDouble(mac, quality.inkCleanliness());
+        updateDouble(mac, quality.stability());
+        updateString(mac, quality.tier() == null ? "" : quality.tier().name());
+    }
+
+    private static void updateSpellParameters(Mac mac, SpellParameters parameters) {
+        if (parameters == null) {
+            updateInt(mac, 0);
+            return;
+        }
+        updateInt(mac, 1);
+        updateDouble(mac, parameters.sizeScale());
+        updateString(mac, parameters.sizeTier() == null ? "" : parameters.sizeTier().name());
+        updateDouble(mac, parameters.qualityEfficiency());
+        updateDouble(mac, parameters.powerMultiplier());
+        updateDouble(mac, parameters.rangeMultiplier());
+        updateDouble(mac, parameters.radiusMultiplier());
+        updateDouble(mac, parameters.durationMultiplier());
+        updateDouble(mac, parameters.speedMultiplier());
+        updateDouble(mac, parameters.forceMultiplier());
+        updateDouble(mac, parameters.stability());
     }
 
     private static void updateSigilSemantic(Mac mac, SigilSemantic semantic) {
@@ -1031,47 +1595,75 @@ public record StoredSpell(
         return new StoredSpell(
                 persisted.formatVersion(),
                 persisted.state(),
-                persisted.compiledSigils(),
-                persisted.compiledSigns(),
+                persisted.compiledSigils().stream()
+                        .map(PersistedCompiledSigil::toCompiled)
+                        .toList(),
+                persisted.compiledSigns().stream()
+                        .map(PersistedCompiledSign::toCompiled)
+                        .toList(),
                 persisted.geometry().orElse(null),
+                persisted.quality().orElse(SpellQuality.UNASSESSED),
+                persisted.parameters().orElse(SpellParameters.NEUTRAL),
                 persisted.displayName(),
                 persisted.strokeHash(),
                 persisted.dictionaryVersion(),
                 persisted.dictionaryHash(),
                 persisted.recognizerVersion(),
+                persisted.scalingSettingsFingerprint(),
                 persisted.authoritySignature());
     }
 
     private static DataResult<StoredSpell> decodePersisted(PersistedSpell persisted) {
+        if (persisted.formatVersion() == FORMAT_VERSION
+                && (!hasCompleteV4Fields(persisted))) {
+            return DataResult.error(() -> "Incomplete v4 stored-spell payload");
+        }
         StoredSpell spell = fromPersisted(persisted);
         if (spell.formatVersion() == FORMAT_VERSION
                 && !spell.hasStructurallyValidCurrentPayload(-1)) {
-            return DataResult.error(() -> "Malformed v3 stored-spell payload");
+            return DataResult.error(() -> "Malformed v4 stored-spell payload");
         }
         return DataResult.success(spell);
     }
 
+    private static boolean hasCompleteV4Fields(PersistedSpell persisted) {
+        if (persisted.quality().isEmpty()
+                || persisted.parameters().isEmpty()
+                || persisted.scalingSettingsFingerprint().isBlank()) {
+            return false;
+        }
+        return persisted.compiledSigils().stream()
+                        .allMatch(sigil -> sigil.qualityMetrics().isPresent())
+                && persisted.compiledSigns().stream()
+                        .allMatch(sign -> sign.qualityMetrics().isPresent());
+    }
+
     private DataResult<PersistedSpell> encodePersisted() {
         if (formatVersion == FORMAT_VERSION && !hasStructurallyValidCurrentPayload(-1)) {
-            return DataResult.error(() -> "Cannot encode malformed v3 stored-spell payload");
+            return DataResult.error(() -> "Cannot encode malformed v4 stored-spell payload");
         }
+        boolean includeV4Fields = formatVersion >= FORMAT_VERSION;
         return DataResult.success(new PersistedSpell(
                 formatVersion,
                 state,
-                compiledSigils,
-                compiledSigns,
+                compiledSigils.stream()
+                        .map(sigil -> PersistedCompiledSigil.fromCompiled(
+                                sigil, includeV4Fields))
+                        .toList(),
+                compiledSigns.stream()
+                        .map(sign -> PersistedCompiledSign.fromCompiled(
+                                sign, includeV4Fields))
+                        .toList(),
                 Optional.ofNullable(geometry),
+                includeV4Fields ? Optional.of(quality) : Optional.empty(),
+                includeV4Fields ? Optional.of(parameters) : Optional.empty(),
                 displayName,
                 strokeHash,
                 dictionaryVersion,
                 dictionaryHash,
                 recognizerVersion,
-                authoritySignature,
-                List.of(),
-                "",
-                Map.of(),
-                Optional.empty(),
-                List.of()));
+                includeV4Fields ? scalingSettingsFingerprint : "",
+                authoritySignature));
     }
 
     private static <E extends Enum<E>> DataResult<E> enumValue(
@@ -1091,6 +1683,17 @@ public record StoredSpell(
         return Enum.valueOf(
                 enumClass,
                 ByteBufCodecs.STRING_UTF8.decode(buffer).toUpperCase(Locale.ROOT));
+    }
+
+    private static double decodeUnitDouble(
+            RegistryFriendlyByteBuf buffer,
+            String label) {
+        double value = ByteBufCodecs.DOUBLE.decode(buffer);
+        if (!unitInterval(value)) {
+            throw new IllegalArgumentException(
+                    "Malformed " + label + ": expected finite value in [0, 1]");
+        }
+        return value;
     }
 
     private static void encodeEnum(RegistryFriendlyByteBuf buffer, Enum<?> value) {
